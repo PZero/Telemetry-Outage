@@ -43,6 +43,14 @@ export const UNIQUE_REGIONS = [];
  * Loads the registry asynchronously from the backend SQLite database.
  */
 export async function loadUPRegistry() {
+  // Don't attempt to load if there's no auth session yet — user hasn't logged in
+  const session = localStorage.getItem("google_user_session");
+  const hasToken = session && (() => { try { const u = JSON.parse(session); return !!(u && u.token); } catch(e) { return false; } })();
+  if (!hasToken) {
+    console.log("[Registry] No auth session available yet — skipping registry load until login.");
+    return;
+  }
+
   try {
     const response = await fetch(`${BASE_URL}/api/registry`, {
       headers: getAuthHeaders()
@@ -54,8 +62,12 @@ export async function loadUPRegistry() {
     updateUniqueRegions();
     console.log(`[Registry] Loaded ${data.length} UPs from backend database.`);
   } catch (err) {
-    console.error("[Registry] Failed to fetch registry from backend, using local mock:", err);
-    loadDefaultMockRegistry();
+    console.error("[Registry] Failed to fetch registry from backend:", err);
+    // Only fall back to mock if we had a token (backend network error, not auth error)
+    if (UP_REGISTRY.length === 0) {
+      console.warn("[Registry] Falling back to mock data due to backend error.");
+      loadDefaultMockRegistry();
+    }
   }
 }
 
