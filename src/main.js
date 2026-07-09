@@ -1106,38 +1106,41 @@ function setupSettingsHandlers() {
   retSel.value = state.retentionMonths;
   simCb.checked = isSimulatedMode();
   
-  tenantIn.value = localStorage.getItem("azure_tenant_id") || "";
-  clientIn.value = localStorage.getItem("azure_client_id") || "";
-  secretIn.value = localStorage.getItem("azure_client_secret") || "";
-  scopeIn.value = localStorage.getItem("azure_scope") || "";
-  tokenIn.value = localStorage.getItem("azure_api_token") || "";
+  tenantIn.value = "Configurato nel backend (.env)";
+  tenantIn.disabled = true;
+  clientIn.value = "Configurato nel backend (.env)";
+  clientIn.disabled = true;
+  secretIn.value = "••••••••••••••••";
+  secretIn.disabled = true;
+  scopeIn.value = "Configurato nel backend (.env)";
+  scopeIn.disabled = true;
+  tokenIn.value = "Gestione automatica nel backend";
+  tokenIn.disabled = true;
 
-  // Credentials fields are always enabled to allow editing configuration at any time.
   simCb.addEventListener("change", (e) => {
     setSimulatedMode(e.target.checked);
   });
 
-  tenantIn.addEventListener("input", (e) => localStorage.setItem("azure_tenant_id", e.target.value.trim()));
-  clientIn.addEventListener("input", (e) => localStorage.setItem("azure_client_id", e.target.value.trim()));
-  secretIn.addEventListener("input", (e) => localStorage.setItem("azure_client_secret", e.target.value.trim()));
-  scopeIn.addEventListener("input", (e) => localStorage.setItem("azure_scope", e.target.value.trim()));
-
+  // Acquire button behaves as a backend health check
+  acquireBtn.innerHTML = "🔌 Verifica Connessione Backend";
   acquireBtn.onclick = async () => {
-    updateSettingsLogs("Richiesta acquisizione token avviata...");
+    updateSettingsLogs("Verifica connessione backend in corso...");
     acquireBtn.disabled = true;
     try {
-      const token = await runTokenAcquisition(
-        tenantIn.value.trim(),
-        clientIn.value.trim(),
-        secretIn.value.trim(),
-        scopeIn.value.trim()
-      );
-      tokenIn.value = token;
-      updateSettingsLogs("Token Azure AD acquisito con successo ed impostato per le chiamate API.");
-      alert("Token Azure AD acquisito con successo!");
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      const response = await fetch(`${apiUrl}/api/health`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (data.status === 'online') {
+        const confMsg = data.apiConfigured ? "configurato correttamente" : "non ancora configurato (imposta il file .env)";
+        updateSettingsLogs(`Backend connesso con successo: Stato ${data.status.toUpperCase()}, API Azure ${confMsg}.`);
+        alert(`Connessione al backend riuscita!\nStato: ${data.status}\nAPI configurate: ${data.apiConfigured}`);
+      } else {
+        updateSettingsLogs(`Stato backend imprevisto: ${JSON.stringify(data)}`);
+      }
     } catch (err) {
-      updateSettingsLogs(`ERRORE acquisizione token: ${err.message}`);
-      alert(`Errore acquisizione token: ${err.message}`);
+      updateSettingsLogs(`ERRORE connessione backend: ${err.message}. Verifica che il server backend sia avviato.`);
+      alert(`Errore connessione backend: ${err.message}\nVerifica che il server sia avviato.`);
     } finally {
       acquireBtn.disabled = false;
     }
@@ -1856,6 +1859,7 @@ async function runMainSyncQueue() {
  * Sends a single task to the Service Worker and awaits response via MessageChannel.
  */
 function sendTaskToSW(task) {
+  task.apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
   return new Promise((resolve) => {
     const worker = navigator.serviceWorker.controller || 
                    (state.swRegistration ? (state.swRegistration.active || state.swRegistration.waiting) : null);

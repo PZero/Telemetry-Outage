@@ -378,8 +378,8 @@ async function fetchObservationsFromAzure(upId, date, type) {
   const name = currentActiveTask.upName || upId;
   const tech = currentActiveTask.upTech || "Solar";
 
-  const url = `/api-proxy/api/observation`;
-  let token = currentActiveTask.token || "";
+  const baseUrl = currentActiveTask.apiUrl || "http://localhost:3000";
+  const url = `${baseUrl}/api/observation`;
 
   const dateObj = new Date(`${date}T00:00:00Z`);
   const prevDateObj = new Date(dateObj.getTime() - 24 * 60 * 60 * 1000);
@@ -405,61 +405,27 @@ async function fetchObservationsFromAzure(upId, date, type) {
 
   notifyClients({
     type: "SYNC_STATUS",
-    log: `[REQ Azure] POST /api/observation | UP: ${name} | Body: ${JSON.stringify(reqBody)}`
+    log: `[REQ Backend] POST /api/observation | UP: ${name}`
   });
 
-  let response = await fetch(url, {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(reqBody)
   });
 
   notifyClients({
     type: "SYNC_STATUS",
-    log: `[RES Azure] HTTP ${response.status} ${response.statusText}`
+    log: `[RES Backend] HTTP ${response.status} ${response.statusText}`
   });
-
-  if (response.status === 401) {
-    notifyClients({
-      type: "SYNC_STATUS",
-      log: `[401 Unauthorized] Token scaduto. Richiedo rinnovo automatico al client...`
-    });
-    try {
-      const newToken = await requestNewTokenFromClient();
-      if (newToken) {
-        token = newToken;
-        currentActiveTask.token = newToken;
-        
-        response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${newToken}`
-          },
-          body: JSON.stringify(reqBody)
-        });
-        
-        notifyClients({
-          type: "SYNC_STATUS",
-          log: `[RES Azure Retry] HTTP ${response.status} ${response.statusText}`
-        });
-      }
-    } catch (tokenErr) {
-      notifyClients({
-        type: "SYNC_STATUS",
-        log: `[Token Refresh Failed] ${tokenErr.message}`
-      });
-    }
-  }
 
   if (!response.ok) {
     const errorDetails = await response.text();
     notifyClients({
       type: "SYNC_STATUS",
-      log: `[RES Azure ERROR] Corpo: ${errorDetails.substring(0, 300)}`
+      log: `[RES Backend ERROR] Corpo: ${errorDetails.substring(0, 300)}`
     });
     throw new Error(`REST API HTTP ${response.status}: ${errorDetails}`);
   }
@@ -552,9 +518,8 @@ async function fetchObservationsFromAzure(upId, date, type) {
 }
 
 async function fetchOutagesFromAzure(upId, startDate, endDate) {
-  const name = currentActiveTask.upName || upId;
-  const url = `/api-proxy/api/outage`;
-  let token = currentActiveTask.token || "";
+  const baseUrl = currentActiveTask.apiUrl || "http://localhost:3000";
+  const url = `${baseUrl}/api/outage`;
   const reqBody = {
     fromDate_UTC: `${startDate}T00:00:00+0000`,
     toDate_UTC: `${endDate}T23:59:59+0000`,
@@ -565,61 +530,27 @@ async function fetchOutagesFromAzure(upId, startDate, endDate) {
 
   notifyClients({
     type: "SYNC_STATUS",
-    log: `[REQ Azure] POST /api/outage | UP: ${name} | Body: ${JSON.stringify(reqBody)}`
+    log: `[REQ Backend] POST /api/outage | UP: ${name}`
   });
 
-  let response = await fetch(url, {
+  const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(reqBody)
   });
 
   notifyClients({
     type: "SYNC_STATUS",
-    log: `[RES Azure] HTTP ${response.status} ${response.statusText}`
+    log: `[RES Backend] HTTP ${response.status} ${response.statusText}`
   });
-
-  if (response.status === 401) {
-    notifyClients({
-      type: "SYNC_STATUS",
-      log: `[401 Unauthorized] Token scaduto per Outages. Richiedo rinnovo automatico al client...`
-    });
-    try {
-      const newToken = await requestNewTokenFromClient();
-      if (newToken) {
-        token = newToken;
-        currentActiveTask.token = newToken;
-        
-        response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${newToken}`
-          },
-          body: JSON.stringify(reqBody)
-        });
-        
-        notifyClients({
-          type: "SYNC_STATUS",
-          log: `[RES Azure Retry Outages] HTTP ${response.status} ${response.statusText}`
-        });
-      }
-    } catch (tokenErr) {
-      notifyClients({
-        type: "SYNC_STATUS",
-        log: `[Token Refresh Failed Outages] ${tokenErr.message}`
-      });
-    }
-  }
 
   if (!response.ok) {
     const errorDetails = await response.text();
     notifyClients({
       type: "SYNC_STATUS",
-      log: `[RES Azure ERROR] Corpo: ${errorDetails.substring(0, 300)}`
+      log: `[RES Backend ERROR] Corpo: ${errorDetails.substring(0, 300)}`
     });
     throw new Error(`REST API HTTP ${response.status}: ${errorDetails}`);
   }

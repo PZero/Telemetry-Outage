@@ -2,7 +2,7 @@
 
 import { getUPById } from "./registry.js";
 
-const BASE_URL = "/api-proxy";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 /**
  * Check if the application should use the Simulated API.
@@ -35,12 +35,10 @@ export async function fetchObservations(upId, date, type) {
     return generateMockObservations(upId, date, type);
   }
 
-  // Real Azure API post request
+  // Real Azure API post request via backend proxy
   const url = `${BASE_URL}/api/observation`;
   const up = getUPById(upId);
   if (!up) throw new Error(`UP ${upId} not found in registry.`);
-
-  const token = localStorage.getItem("azure_api_token") || "";
 
   const dateObj = new Date(`${date}T00:00:00Z`);
   const prevDateObj = new Date(dateObj.getTime() - 24 * 60 * 60 * 1000);
@@ -58,8 +56,7 @@ export async function fetchObservations(upId, date, type) {
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       from_UTC: `${prevDateStr}T21:00:00`,
@@ -95,13 +92,10 @@ export async function fetchOutages(upId, startDate, endDate) {
   const up = getUPById(upId);
   if (!up) throw new Error(`UP ${upId} not found in registry.`);
 
-  const token = localStorage.getItem("azure_api_token") || "";
-
   const response = await fetch(url, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       fromDate_UTC: `${startDate}T00:00:00+0000`,
