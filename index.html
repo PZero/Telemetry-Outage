@@ -13,6 +13,9 @@
   
   <!-- CSS Stylesheet -->
   <link rel="stylesheet" href="./src/styles.css">
+  
+  <!-- Google Identity Services (OAuth 2.0) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
     window.onerror = function(message, source, lineno, colno, error) {
       alert(`[Early Error Boundary]\n${message}\nFile: ${source}\nRiga: ${lineno}:${colno}`);
@@ -34,7 +37,54 @@
     });
   </script>
 </head>
-<body>  <div id="app-container" style="display: flex; flex-direction: row; height: 100vh; width: 100vw; overflow: hidden;">
+<body>
+  <!-- ==========================================
+       LOGIN OVERLAY SCREEN (GOOGLE AUTHENTICATION)
+       ========================================== -->
+  <div id="login-screen" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: radial-gradient(circle at center, #0f172a 0%, #020617 100%); z-index: 9999; display: flex; align-items: center; justify-content: center; overflow: hidden; transition: opacity 0.5s ease;">
+    <!-- Abstract glowing backgrounds -->
+    <div style="position: absolute; width: 400px; height: 400px; background: rgba(16, 185, 129, 0.08); filter: blur(100px); border-radius: 50%; top: -100px; left: -100px;"></div>
+    <div style="position: absolute; width: 500px; height: 500px; background: rgba(59, 130, 246, 0.06); filter: blur(120px); border-radius: 50%; bottom: -150px; right: -150px;"></div>
+
+    <div style="width: 380px; padding: 40px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 20px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 24px; position: relative; z-index: 10;">
+      <!-- Logo and Brand -->
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+        <img src="./assets/logo.svg" alt="Logo" style="width: 50px; height: 50px; filter: drop-shadow(0 0 10px rgba(16,185,129,0.4));">
+        <div>
+          <h2 style="font-size: 1.4rem; font-weight: 800; margin: 0; background: linear-gradient(135deg, #4ade80 0%, #3b82f6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.05em; text-transform: uppercase;">UP Data Check</h2>
+          <p style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin: 4px 0 0 0;">Telemetry & Outage Integrity</p>
+        </div>
+      </div>
+
+      <div style="height: 1px; width: 100%; background: linear-gradient(to right, transparent, rgba(255,255,255,0.08), transparent);"></div>
+
+      <!-- Welcome message -->
+      <div style="text-align: center;">
+        <h3 style="font-size: 0.9rem; font-weight: 600; color: var(--text-main); margin: 0 0 8px 0;">Accesso Richiesto</h3>
+        <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; margin: 0;">Esegui l'accesso per monitorare le telemetrie e gli outages delle 100 unità di produzione.</p>
+      </div>
+
+      <!-- Google Button / Mock Login Button -->
+      <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 50px; justify-content: center;">
+        <!-- Real Google Button Container -->
+        <div id="google-signin-btn-container" style="width: 100%; display: flex; justify-content: center;">
+          <div id="google-signin-btn"></div>
+        </div>
+        
+        <!-- Mock Login Button (visible only in Demo/Bypass mode) -->
+        <button id="mock-signin-btn" style="display: none; width: 100%; padding: 10px 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border: none; border-radius: 8px; color: white; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(16,185,129,0.25);" onmouseover="this.style.opacity=0.9" onmouseout="this.style.opacity=1">
+          🔐 Accedi in Modalità Sviluppo (Demo)
+        </button>
+      </div>
+      
+      <!-- Footer Note -->
+      <span id="login-footer-note" style="font-size: 0.58rem; color: var(--text-muted); line-height: 1.4;">
+        Google Sign-In abilitato. I tuoi dati personali non vengono registrati su database di terze parti.
+      </span>
+    </div>
+  </div>
+
+  <div id="app-container" style="display: flex; flex-direction: row; height: 100vh; width: 100vw; overflow: hidden;">
     
     <!-- ==========================================
          LEFT SIDEBAR: BRAND & VERTICAL NAVIGATION
@@ -89,6 +139,19 @@
         </div>
         <div class="sidebar-hide-on-collapse" style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 2px;">
           Build: <span style="font-weight: 600; color: #60a5fa;">v80</span>
+        </div>
+        <!-- Google User profile widget -->
+        <div id="user-profile-widget" style="display: none; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); text-align: left;">
+          <div id="user-avatar-container" style="position: relative; flex-shrink: 0;">
+            <img id="user-avatar-img" src="" alt="" style="width: 24px; height: 24px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.1); display: none;">
+            <div id="user-avatar-fallback" style="width: 24px; height: 24px; border-radius: 50%; background: linear-gradient(135deg, #10b981, #3b82f6); color: white; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.1);">US</div>
+          </div>
+          <div style="display: flex; flex-direction: column; overflow: hidden; flex-grow: 1;" class="sidebar-hide-on-collapse">
+            <span id="user-display-name" style="font-size: 0.65rem; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;">Utente</span>
+            <button id="user-logout-btn" style="background: none; border: none; padding: 0; color: #f87171; font-size: 0.55rem; font-weight: 600; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 4px; margin-top: 1px;">
+              🚪 Esci
+            </button>
+          </div>
         </div>
       </div>
     </aside>

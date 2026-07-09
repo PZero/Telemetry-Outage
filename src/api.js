@@ -5,6 +5,23 @@ import { getUPById } from "./registry.js";
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 /**
+ * Builds standard request headers with Authorization Bearer token from active session.
+ */
+export function getAuthHeaders(extraHeaders = {}) {
+  const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+  const session = localStorage.getItem("google_user_session");
+  if (session) {
+    try {
+      const user = JSON.parse(session);
+      if (user && user.token) {
+        headers['Authorization'] = `Bearer ${user.token}`;
+      }
+    } catch (e) {}
+  }
+  return headers;
+}
+
+/**
  * Check if the application should use the Simulated API.
  * Defaults to true since the real API requires subscription/bearer tokens and CORS authorization.
  */
@@ -55,16 +72,16 @@ export async function fetchObservations(upId, date, type) {
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: getAuthHeaders(),
     body: JSON.stringify({
       from_UTC: `${prevDateStr}T21:00:00`,
       to_UTC: `${nextDateStr}T03:00:00`,
       update: false,
       upname: [up.name],
       aggregatedData: false,
-      type: type
+      type: type,
+      upId: upId,
+      date: date
     })
   });
 
@@ -94,15 +111,16 @@ export async function fetchOutages(upId, startDate, endDate) {
 
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers: getAuthHeaders(),
     body: JSON.stringify({
       fromDate_UTC: `${startDate}T00:00:00+0000`,
       toDate_UTC: `${endDate}T23:59:59+0000`,
       limitationType: "ACTUALFACILITY, FACILITY, ACTUALGRID, GRID, ODD",
       upname: [up.name],
-      provider: []
+      provider: [],
+      upId: upId,
+      startDate: startDate,
+      endDate: endDate
     })
   });
 

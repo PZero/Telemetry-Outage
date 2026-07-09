@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { dbService } from './database.js';
 import { enqueueRequest, getQueueStatus } from './queue.js';
+import { requireGoogleAuth } from './auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -113,6 +114,18 @@ app.get('/api/health', (req, res) => {
     apiConfigured: !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET)
   });
 });
+
+/**
+ * Google Client Configuration public endpoint
+ */
+app.get('/api/auth/google/config', (req, res) => {
+  res.json({
+    googleClientId: process.env.GOOGLE_CLIENT_ID || null
+  });
+});
+
+// Secure all subsequent API endpoints
+app.use('/api', requireGoogleAuth);
 
 /**
  * Proxy for Daily Observations (SCADA/Meter telemetry)

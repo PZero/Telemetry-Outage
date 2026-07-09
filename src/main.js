@@ -7,7 +7,7 @@ window.onerror = function(message, source, lineno, colno, error) {
 
 import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry } from "./registry.js";
 import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations } from "./db.js";
-import { isSimulatedMode, setSimulatedMode } from "./api.js";
+import { isSimulatedMode, setSimulatedMode, getAuthHeaders } from "./api.js";
 import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats } from "./ui.js";
 
 // Global Application State
@@ -36,7 +36,8 @@ const state = {
   isSyncRunning: false,
   shouldCancelSync: false,
   swRegistration: null,
-  ppaTags: []
+  ppaTags: [],
+  user: null
 };
 window.appState = state;
 
@@ -46,7 +47,9 @@ window.appState = state;
 async function fetchPPATagsFromServer() {
   try {
     const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
-    const response = await fetch(`${apiUrl}/api/ppa/tags`);
+    const response = await fetch(`${apiUrl}/api/ppa/tags`, {
+      headers: getAuthHeaders()
+    });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
     const data = await response.json();
     state.ppaTags = data;
@@ -84,16 +87,62 @@ for (let d = new Date(POOL_START_DATE); d <= POOL_END_DATE; d.setDate(d.getDate(
 window.addEventListener("DOMContentLoaded", async () => {
   console.log("[App] Booting Telemetry & Outage Integrity PWA...");
   
-  // 1. Initialize central Registry, PPA Tags, and Database Proxy
+  // 1. Initialize user session and Google Identity Services
+  const logoutBtn = document.getElementById("user-logout-btn");
+  if (logoutBtn) {
+    logoutBtn.onclick = logoutUser;
+  }
+
+  // Restore session if exists
+  const storedSession = localStorage.getItem("google_user_session");
+  let hasSession = false;
+  if (storedSession) {
+    try {
+      const user = JSON.parse(storedSession);
+      loginUser(user);
+      hasSession = true;
+    } catch (e) {
+      console.warn("[Auth] Failed to restore session:", e);
+      logoutUser();
+    }
+  } else {
+    logoutUser();
+  }
+
+  // Fetch Google client configuration and setup login buttons
   try {
-    await loadUPRegistry();
-    await fetchPPATagsFromServer();
-    await initDB();
-    console.log("[App] Backend central database and DB proxy initialized.");
-    startQueueStatusPoller();
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const res = await fetch(`${apiUrl}/api/auth/google/config`);
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+    const configData = await res.json();
+    
+    if (configData.googleClientId) {
+      document.getElementById("google-signin-btn-container").style.display = "flex";
+      document.getElementById("mock-signin-btn").style.display = "none";
+      
+      // Initialize GIS
+      google.accounts.id.initialize({
+        client_id: configData.googleClientId,
+        callback: handleCredentialResponse
+      });
+      google.accounts.id.renderButton(
+        document.getElementById("google-signin-btn"),
+        { theme: "filled_dark", size: "large", width: 280 }
+      );
+    } else {
+      // Setup mock bypass mode
+      document.getElementById("google-signin-btn-container").style.display = "none";
+      document.getElementById("mock-signin-btn").style.display = "block";
+      document.getElementById("mock-signin-btn").onclick = handleMockLogin;
+      document.getElementById("login-footer-note").innerText = "⚠️ Google Sign-In disabilitato (Client ID mancante). Accesso locale in modalità Demo.";
+    }
   } catch (err) {
-    console.error(err);
-    alert("Impossibile inizializzare il database centralizzato. L'applicazione potrebbe mostrare dati incompleti.");
+    console.error("[Auth] Google Sign-In setup failed:", err);
+    // Fallback to local demo button
+    document.getElementById("google-signin-btn-container").style.display = "none";
+    document.getElementById("mock-signin-btn").style.display = "block";
+    document.getElementById("mock-signin-btn").onclick = handleMockLogin;
+    document.getElementById("login-footer-note").innerText = "⚠️ Errore connessione server. Accesso locale in modalità Demo.";
   }
 
   // 2. Register Service Worker
@@ -1980,7 +2029,9 @@ function startQueueStatusPoller() {
         queryParams = `?upId=${state.selectedUP}&date=${state.selectedDate}&type=scada`;
       }
       
-      const response = await fetch(`${apiUrl}/api/queue/status${queryParams}`);
+      const response = await fetch(`${apiUrl}/api/queue/status${queryParams}`, {
+        headers: getAuthHeaders()
+      });
       if (!response.ok) throw new Error(`HTTP error ${response.status}`);
       const data = await response.json();
       
@@ -2018,6 +2069,135 @@ function updateQueueStatusUI(statusData) {
   }
 }
 
+/**
+ * Handles real Google Sign-In response
+ */
+function handleCredentialResponse(response) {
+  const token = response.credential;
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+        return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+    
+    const payload = JSON.parse(jsonPayload);
+    
+    const user = {
+      name: payload.name,
+      email: payload.email,
+      picture: payload.picture,
+      token: token
+    };
+    
+    loginUser(user);
+  } catch (err) {
+    console.error('[Auth] Failed to parse google credential:', err);
+    alert('Errore di autenticazione con Google.');
+  }
+}
+
+/**
+ * Handles mock login for local development
+ */
+function handleMockLogin() {
+  const user = {
+    name: 'Sviluppatore PZero (Demo)',
+    email: 'demo.developer@pzero.io',
+    picture: '',
+    token: 'mock-google-token-id'
+  };
+  loginUser(user);
+}
+
+/**
+ * Persists session and updates the UI state
+ */
+function loginUser(user) {
+  state.user = user;
+  localStorage.setItem("google_user_session", JSON.stringify(user));
+  
+  // Update sidebar profile widget
+  const widget = document.getElementById("user-profile-widget");
+  const avatarImg = document.getElementById("user-avatar-img");
+  const avatarFallback = document.getElementById("user-avatar-fallback");
+  const displayName = document.getElementById("user-display-name");
+  
+  if (widget && displayName) {
+    widget.style.display = "flex";
+    displayName.innerText = user.name;
+    displayName.title = user.email;
+    
+    if (user.picture) {
+      avatarImg.src = user.picture;
+      avatarImg.style.display = "block";
+      avatarFallback.style.display = "none";
+    } else {
+      avatarImg.style.display = "none";
+      avatarFallback.style.display = "flex";
+      
+      const parts = user.name.split(' ');
+      const initials = parts.map(p => p[0]).join('').substring(0, 2).toUpperCase();
+      avatarFallback.innerText = initials || 'US';
+    }
+  }
+
+  // Fade out and hide login screen overlay
+  const loginScreen = document.getElementById("login-screen");
+  if (loginScreen) {
+    loginScreen.style.opacity = "0";
+    setTimeout(() => {
+      loginScreen.style.display = "none";
+    }, 500);
+  }
+  
+  console.log(`[Auth] User ${user.email} successfully logged in.`);
+  
+  // Initialize and load everything securely with auth headers active
+  (async () => {
+    try {
+      await fetchPPATagsFromServer();
+      await initDB();
+      await loadUPRegistry();
+      startQueueStatusPoller();
+      
+      // Re-populate dropdowns
+      if (typeof populateDropdowns === 'function') {
+        populateDropdowns();
+      }
+      
+      // Update badge
+      if (typeof updatePersistenceBadge === 'function') {
+        updatePersistenceBadge();
+      }
+      applyFiltersAndRender();
+    } catch (err) {
+      console.error("[Auth Boot] Failed to load secure backend data:", err);
+    }
+  })();
+}
+
+/**
+ * Handles user logout
+ */
+function logoutUser() {
+  state.user = null;
+  localStorage.removeItem("google_user_session");
+  
+  // Show login screen
+  const loginScreen = document.getElementById("login-screen");
+  if (loginScreen) {
+    loginScreen.style.opacity = "1";
+    loginScreen.style.display = "flex";
+  }
+  
+  // Hide sidebar widget
+  const widget = document.getElementById("user-profile-widget");
+  if (widget) widget.style.display = "none";
+  
+  console.log('[Auth] User logged out.');
+}
+
 // ====================================================
 // PPA (POWER PURCHASE AGREEMENT) MANAGEMENT SECTION
 // ====================================================
@@ -2031,7 +2211,7 @@ async function savePPATagToServer(name, color) {
     const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
     const response = await fetch(`${apiUrl}/api/ppa/tags`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ name, color })
     });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
@@ -2046,7 +2226,7 @@ async function deletePPATagFromServer(name) {
     const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
     const response = await fetch(`${apiUrl}/api/ppa/tags`, {
       method: "DELETE",
-      headers: { "Content-Type": "application/json" },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ name })
     });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
@@ -2110,7 +2290,7 @@ function renderPPAPanel() {
           const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
           return fetch(`${apiUrl}/api/registry`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: getAuthHeaders(),
             body: JSON.stringify(UP_REGISTRY)
           });
         }).then(() => {
@@ -2314,7 +2494,7 @@ function setupPPAHandlers() {
       const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
       fetch(`${apiUrl}/api/registry`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify(UP_REGISTRY)
       })
       .then(response => {
@@ -2351,7 +2531,7 @@ function setupPPAHandlers() {
         const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
         fetch(`${apiUrl}/api/registry`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: getAuthHeaders(),
           body: JSON.stringify(UP_REGISTRY)
         })
         .then(response => {

@@ -1,6 +1,8 @@
 // Centralized Registry of 100 Production Units (UPs)
 // Fetches state dynamically from the backend SQLite database.
 
+import { getAuthHeaders } from "./api.js";
+
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const regions = [
@@ -42,7 +44,9 @@ export const UNIQUE_REGIONS = [];
  */
 export async function loadUPRegistry() {
   try {
-    const response = await fetch(`${BASE_URL}/api/registry`);
+    const response = await fetch(`${BASE_URL}/api/registry`, {
+      headers: getAuthHeaders()
+    });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
     const data = await response.json();
     UP_REGISTRY.length = 0;
@@ -122,9 +126,7 @@ export async function setScadaDisabled(upId, disabled) {
   try {
     const response = await fetch(`${BASE_URL}/api/registry/update`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ upId, scadaDisabled: disabled })
     });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);

@@ -1,6 +1,8 @@
 // SQLite Database proxy manager for centralized storage.
 // Replaces IndexedDB client-side storage with secure backend SQLite calls.
 
+import { getAuthHeaders } from "./api.js";
+
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 /**
@@ -25,9 +27,7 @@ export async function saveObservations(upId, date, type, values) {
     const url = `${BASE_URL}/api/db/observations`;
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ upId, date, type, values })
     });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
@@ -44,7 +44,9 @@ export async function saveObservations(upId, date, type, values) {
 export async function getObservations(upId, date, type) {
   try {
     const url = `${BASE_URL}/api/db/observations?upId=${upId}&date=${date}&type=${type}`;
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: getAuthHeaders()
+    });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
     const data = await response.json();
@@ -84,9 +86,7 @@ export async function saveOutages(outagesList) {
     const url = `${BASE_URL}/api/db/outages`;
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ outages: outagesList })
     });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
@@ -103,7 +103,9 @@ export async function saveOutages(outagesList) {
 export async function getOutages(upId) {
   try {
     const url = `${BASE_URL}/api/db/outages?upId=${upId}`;
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: getAuthHeaders()
+    });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
     const data = await response.json();
     return data.outages || [];
@@ -142,7 +144,10 @@ export async function getOutagesForPeriod(upId, startDateISO, endDateISO) {
 export async function clearDatabase() {
   try {
     const url = `${BASE_URL}/api/db/clear`;
-    const response = await fetch(url, { method: 'POST' });
+    const response = await fetch(url, { 
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
     console.log('[Storage Proxy] Database cleared successfully.');
     return true;
@@ -160,9 +165,7 @@ export async function deleteOlderThan(limitDate) {
     const url = `${BASE_URL}/api/db/retention`;
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ limitDate })
     });
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
