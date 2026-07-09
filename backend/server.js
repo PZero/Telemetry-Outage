@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { dbService } from './database.js';
 import { enqueueRequest, getQueueStatus } from './queue.js';
-import { requireGoogleAuth } from './auth.js';
+import { requireGoogleAuth, requireAdmin } from './auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -126,6 +126,13 @@ app.get('/api/auth/google/config', (req, res) => {
 
 // Secure all subsequent API endpoints
 app.use('/api', requireGoogleAuth);
+
+/**
+ * User Profile Endpoint
+ */
+app.get('/api/auth/profile', (req, res) => {
+  res.json(req.user);
+});
 
 /**
  * Proxy for Daily Observations (SCADA/Meter telemetry)
@@ -260,7 +267,7 @@ app.post('/api/db/outages', async (req, res) => {
 /**
  * Database Administration Endpoints
  */
-app.post('/api/db/clear', async (req, res) => {
+app.post('/api/db/clear', requireAdmin, async (req, res) => {
   try {
     await dbService.clearDatabase();
     res.json({ success: true });
@@ -269,7 +276,7 @@ app.post('/api/db/clear', async (req, res) => {
   }
 });
 
-app.post('/api/db/retention', async (req, res) => {
+app.post('/api/db/retention', requireAdmin, async (req, res) => {
   try {
     const { limitDate } = req.body;
     if (!limitDate) {
@@ -306,7 +313,7 @@ app.get('/api/registry', async (req, res) => {
   }
 });
 
-app.post('/api/registry', async (req, res) => {
+app.post('/api/registry', requireAdmin, async (req, res) => {
   try {
     const upList = req.body;
     if (!Array.isArray(upList)) {
@@ -319,7 +326,7 @@ app.post('/api/registry', async (req, res) => {
   }
 });
 
-app.post('/api/registry/reset', async (req, res) => {
+app.post('/api/registry/reset', requireAdmin, async (req, res) => {
   try {
     await dbService.resetRegistry();
     res.json({ success: true });
@@ -353,7 +360,7 @@ app.get('/api/ppa/tags', async (req, res) => {
   }
 });
 
-app.post('/api/ppa/tags', async (req, res) => {
+app.post('/api/ppa/tags', requireAdmin, async (req, res) => {
   try {
     const { name, color } = req.body;
     if (!name || !color) {
@@ -366,13 +373,41 @@ app.post('/api/ppa/tags', async (req, res) => {
   }
 });
 
-app.delete('/api/ppa/tags', async (req, res) => {
+app.delete('/api/ppa/tags', requireAdmin, async (req, res) => {
   try {
     const { name } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'Missing name in request body.' });
     }
     await dbService.deletePpaTag(name);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * User Management Endpoints (Admin only)
+ */
+app.get('/api/users', requireAdmin, async (req, res) => {
+  try {
+    const users = await dbService.getAllUsers();
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/role', requireAdmin, async (req, res) => {
+  try {
+    const { email, role } = req.body;
+    if (!email || !role) {
+      return res.status(400).json({ error: 'Missing required parameters email or role.' });
+    }
+    if (email === 'fnicora@gmail.com') {
+      return res.status(400).json({ error: 'Non è consentito modificare il ruolo dell\'utente proprietario.' });
+    }
+    await dbService.updateUserRole(email, role);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -1,4 +1,5 @@
 import { OAuth2Client } from 'google-auth-library';
+import { dbService } from './database.js';
 
 let client = null;
 
@@ -9,6 +10,33 @@ function getOAuthClient() {
     console.log('[Auth] Google OAuth2 Client initialized with Client ID.');
   }
   return client;
+}
+
+/**
+ * Ensures user is stored in the database, forces fnicora@gmail.com to be admin,
+ * and retrieves the user's role.
+ */
+async function syncAndGetUserRole(email, name) {
+  try {
+    let user = await dbService.getUserByEmail(email);
+    if (!user) {
+      const role = (email === 'fnicora@gmail.com') ? 'admin' : 'normal';
+      await dbService.saveUser(email, name, role);
+      user = { email, name, role };
+      console.log(`[Auth] Registered new user: ${email} with role: ${role}`);
+    } else {
+      // Force fnicora@gmail.com to always be admin
+      if (email === 'fnicora@gmail.com' && user.role !== 'admin') {
+        user.role = 'admin';
+        // Run update query in background
+        dbService.updateUserRole(email, 'admin').catch(console.error);
+      }
+    }
+    return user.role;
+  } catch (err) {
+    console.error('[Auth Sync Error] Failed to sync user details:', err);
+    return (email === 'fnicora@gmail.com') ? 'admin' : 'normal';
+  }
 }
 
 /**
@@ -29,10 +57,14 @@ export async function requireGoogleAuth(req, res, next) {
     // DEMO / BYPASS MODE (No Client ID configured in .env)
     // ----------------------------------------------------
     if (token === 'mock-google-token-id') {
+      const email = 'demo.developer@pzero.io';
+      const name = 'Sviluppatore PZero (Demo)';
+      const role = await syncAndGetUserRole(email, name);
       req.user = {
-        email: 'demo.developer@pzero.io',
-        name: 'Sviluppatore PZero (Demo)',
-        picture: '' // Empty picture will fallback to initials in frontend
+        email,
+        name,
+        picture: '',
+        role
       };
       return next();
     }
@@ -57,11 +89,16 @@ export async function requireGoogleAuth(req, res, next) {
       throw new Error('Google ID Token payload is empty.');
     }
 
+    const email = payload.email;
+    const name = payload.name;
+    const role = await syncAndGetUserRole(email, name);
+
     // Attach verified user info to request
     req.user = {
-      email: payload.email,
-      name: payload.name,
-      picture: payload.picture
+      email,
+      name,
+      picture: payload.picture,
+      role
     };
 
     next();
@@ -69,4 +106,14 @@ export async function requireGoogleAuth(req, res, next) {
     console.error('[Auth Error] Google token verification failed:', error.message);
     res.status(401).json({ error: `Authentication failed: ${error.message}` });
   }
+}
+
+/**
+ * Express Middleware to restrict route access to Admin users only.
+ */
+export function requireAdmin(req, res, next) {
+  if (req.user && req.user.role === 'admin') {
+    return next();
+  }
+  res.status(403).json({ error: 'Access denied. Administrator privileges required.' });
 }

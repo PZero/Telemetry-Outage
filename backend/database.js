@@ -129,6 +129,16 @@ async function initializeTables() {
       )
     `);
 
+    // 5. Users Table (RBAC)
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS users (
+        email TEXT PRIMARY KEY,
+        name TEXT,
+        role TEXT,
+        created_at TEXT
+      )
+    `);
+
     // Seed PPA Tags if empty
     const ppaCount = await dbGet('SELECT COUNT(*) as count FROM ppa_tags');
     if (ppaCount.count === 0) {
@@ -137,6 +147,12 @@ async function initializeTables() {
         await dbRun('INSERT INTO ppa_tags (name, color) VALUES (?, ?)', [tag.name, tag.color]);
       }
     }
+
+    // Seed Super Admin if not exists
+    await dbRun(`
+      INSERT OR IGNORE INTO users (email, name, role, created_at)
+      VALUES (?, ?, ?, datetime('now'))
+    `, ['fnicora@gmail.com', 'Francesco Nicora', 'admin']);
 
     // Seed Registry if empty
     const regCount = await dbGet('SELECT COUNT(*) as count FROM registry');
@@ -312,6 +328,34 @@ export const dbService = {
     await dbRun('DELETE FROM ppa_tags WHERE name = ?', [name]);
     // Also remove reference from UPs
     await dbRun('UPDATE registry SET ppa_partner = NULL WHERE ppa_partner = ?', [name]);
+    return true;
+  },
+
+  // Users & Roles CRUD
+  async getUserByEmail(email) {
+    return await dbGet('SELECT * FROM users WHERE email = ?', [email]);
+  },
+
+  async saveUser(email, name, role) {
+    await dbRun(`
+      INSERT INTO users (email, name, role, created_at)
+      VALUES (?, ?, ?, datetime('now'))
+      ON CONFLICT(email) DO UPDATE SET 
+        name = excluded.name,
+        role = excluded.role
+    `, [email, name, role]);
+    return true;
+  },
+
+  async getAllUsers() {
+    return await dbAll('SELECT * FROM users ORDER BY role ASC, name ASC');
+  },
+
+  async updateUserRole(email, role) {
+    if (email === 'fnicora@gmail.com') {
+      throw new Error('Non è consentito modificare il ruolo dell\'utente proprietario.');
+    }
+    await dbRun('UPDATE users SET role = ? WHERE email = ?', [role, email]);
     return true;
   }
 };

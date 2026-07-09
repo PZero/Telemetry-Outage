@@ -673,6 +673,11 @@ function handleHeatmapCellClick(upId, dateStr) {
  * Navigates view panel tabs.
  */
 function navigateToView(viewName) {
+  // Guard access to settings for non-admin users
+  if (viewName === "settings" && state.user && state.user.role !== 'admin') {
+    console.warn("[Auth Security] Rejected unauthorized access to Settings.");
+    viewName = "fleet";
+  }
   state.view = viewName;
 
   document.getElementById("fleet-heatmap-view").classList.add("hidden");
@@ -1368,7 +1373,7 @@ function setupSettingsHandlers() {
       const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
       fetch(`${apiUrl}/api/registry`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify(customList)
       })
       .then(response => {
@@ -1399,7 +1404,10 @@ function setupSettingsHandlers() {
         if (fleetTextarea) fleetTextarea.value = "";
 
         const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
-        fetch(`${apiUrl}/api/registry/reset`, { method: "POST" })
+        fetch(`${apiUrl}/api/registry/reset`, {
+          method: "POST",
+          headers: getAuthHeaders()
+        })
         .then(response => {
           if (!response.ok) throw new Error(`HTTP error ${response.status}`);
           return import("./registry.js");
@@ -1417,6 +1425,11 @@ function setupSettingsHandlers() {
         });
       }
     };
+  }
+
+  const refreshUsersBtn = document.getElementById("refresh-users-btn");
+  if (refreshUsersBtn) {
+    refreshUsersBtn.onclick = () => loadUsersTable();
   }
 }
 
@@ -2156,10 +2169,40 @@ function loginUser(user) {
   // Initialize and load everything securely with auth headers active
   (async () => {
     try {
+      // 1. Fetch complete profile including the database role
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      const profileRes = await fetch(`${apiUrl}/api/auth/profile`, {
+        headers: getAuthHeaders()
+      });
+      if (!profileRes.ok) throw new Error("Failed to load user profile");
+      const profile = await profileRes.json();
+      state.user.role = profile.role; // Set the role from backend database!
+      
+      // Update session storage with the role
+      localStorage.setItem("google_user_session", JSON.stringify(state.user));
+      
+      // 2. Hide or show settings nav tab based on admin role
+      const navSettingsBtn = document.getElementById("nav-settings-btn");
+      if (navSettingsBtn) {
+        if (state.user.role === 'admin') {
+          navSettingsBtn.style.setProperty("display", "flex", "important");
+        } else {
+          navSettingsBtn.style.setProperty("display", "none", "important");
+          // If the user was somehow looking at settings, redirect them to map
+          if (state.view === "settings") {
+            navigateToView("fleet");
+          }
+        }
+      }
+
       await fetchPPATagsFromServer();
       await initDB();
       await loadUPRegistry();
       startQueueStatusPoller();
+      
+      if (state.user.role === 'admin') {
+        loadUsersTable(); // Load the users management table if admin!
+      }
       
       // Re-populate dropdowns
       if (typeof populateDropdowns === 'function') {
@@ -2194,6 +2237,12 @@ function logoutUser() {
   // Hide sidebar widget
   const widget = document.getElementById("user-profile-widget");
   if (widget) widget.style.display = "none";
+
+  // Hide settings nav tab for security
+  const navSettingsBtn = document.getElementById("nav-settings-btn");
+  if (navSettingsBtn) {
+    navSettingsBtn.style.setProperty("display", "none", "important");
+  }
   
   console.log('[Auth] User logged out.');
 }
@@ -2546,5 +2595,108 @@ function setupPPAHandlers() {
         });
       }
     };
+  }
+}
+
+/**
+ * Fetches and renders the User Management table inside the Settings View.
+ */
+async function loadUsersTable() {
+  const tbody = document.getElementById("settings-users-tbody");
+  const refreshBtn = document.getElementById("refresh-users-btn");
+  if (!tbody) return;
+
+  if (refreshBtn) refreshBtn.disabled = true;
+
+  try {
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const response = await fetch(`${apiUrl}/api/users`, {
+      headers: getAuthHeaders()
+    });
+    
+    if (!response.ok) {
+      if (response.status === 403) {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #f87171; font-style: italic; padding: 20px;">Accesso negato. Privilegi di amministratore richiesti.</td></tr>`;
+        return;
+      }
+      throw new Error(`HTTP error ${response.status}`);
+    }
+
+    const users = await response.json();
+    
+    tbody.innerHTML = users.map(user => {
+      const isOwner = user.email === 'fnicora@gmail.com';
+      const isSelf = user.email === (state.user ? state.user.email : '');
+      const isAdmin = user.role === 'admin';
+      
+      // Avatar initials
+      const parts = user.name.split(' ');
+      const initials = parts.map(p => p[0]).join('').substring(0, 2).toUpperCase();
+      
+      const avatarHtml = user.picture 
+        ? `<img src="${user.picture}" alt="" style="width: 24px; height: 24px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.1);">`
+        : `<div style="width: 24px; height: 24px; border-radius: 50%; background: ${isAdmin ? 'linear-gradient(135deg, #a855f7, #3b82f6)' : 'rgba(255,255,255,0.08)'}; color: white; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.1);">${initials || 'US'}</div>`;
+
+      const roleBadge = isAdmin
+        ? `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; font-weight: 600; font-size: 0.65rem;">Admin</span>`
+        : `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: var(--text-muted); font-size: 0.65rem;">Utente</span>`;
+
+      // Action Button details
+      let actionBtnHtml = '';
+      if (isOwner) {
+        actionBtnHtml = `<span style="color: var(--text-muted); font-size: 0.65rem; display: inline-flex; align-items: center; gap: 4px; font-style: italic;">🔒 Proprietario Protetto</span>`;
+      } else if (isSelf) {
+        actionBtnHtml = `<span style="color: var(--text-muted); font-size: 0.65rem; display: inline-flex; align-items: center; gap: 4px; font-style: italic;">👤 Tu (Protetto)</span>`;
+      } else if (isAdmin) {
+        actionBtnHtml = `<button class="btn btn-danger ppa-delete-tag-btn change-user-role-btn" data-email="${user.email}" data-target-role="normal" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171;">Rimuovi Admin</button>`;
+      } else {
+        actionBtnHtml = `<button class="btn btn-primary change-user-role-btn" data-email="${user.email}" data-target-role="admin" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa;">Promuovi ad Admin</button>`;
+      }
+
+      return `
+        <tr style="border-bottom: 1px solid var(--panel-border); height: 45px;">
+          <td style="padding: 6px 16px; text-align: center;">${avatarHtml}</td>
+          <td style="padding: 6px 16px; font-weight: 600; color: var(--text-main);">${user.name}</td>
+          <td style="padding: 6px 16px; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.7rem;">${user.email}</td>
+          <td style="padding: 6px 16px;">${roleBadge}</td>
+          <td style="padding: 6px 16px; text-align: right;">${actionBtnHtml}</td>
+        </tr>
+      `;
+    }).join("");
+
+    // Bind action buttons
+    tbody.querySelectorAll(".change-user-role-btn").forEach(btn => {
+      btn.onclick = async () => {
+        const email = btn.dataset.email;
+        const targetRole = btn.dataset.targetRole;
+        const actionLabel = targetRole === 'admin' ? 'promuovere ad Admin' : 'rimuovere da Admin';
+        
+        if (confirm(`Sei sicuro di voler ${actionLabel} l'utente "${email}"?`)) {
+          try {
+            const updateUrl = `${apiUrl}/api/users/role`;
+            const res = await fetch(updateUrl, {
+              method: 'POST',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ email, role: targetRole })
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error || `HTTP error ${res.status}`);
+            }
+            showToastNotification(`Ruolo aggiornato con successo per ${email}`);
+            await loadUsersTable();
+          } catch (e) {
+            console.error(e);
+            alert(`Errore cambio ruolo: ${e.message}`);
+          }
+        }
+      };
+    });
+
+  } catch (error) {
+    console.error("[Settings Users] Failed to load users list:", error);
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--accent-red); font-style: italic; padding: 20px;">Impossibile recuperare l'elenco utenti dal server.</td></tr>`;
+  } finally {
+    if (refreshBtn) refreshBtn.disabled = false;
   }
 }
