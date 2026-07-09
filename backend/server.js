@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { dbService } from './database.js';
+import { enqueueRequest, getQueueStatus } from './queue.js';
 
 // Load environment variables
 dotenv.config();
@@ -118,8 +119,27 @@ app.get('/api/health', (req, res) => {
  */
 app.post('/api/observation', async (req, res) => {
   try {
-    console.log(`[Proxy] Forwarding /api/observation request for: ${req.body.upname || 'unknown'}`);
-    const data = await proxyToAzure('/api/observation', req.body);
+    const { upId, date, type } = req.body;
+    if (!upId || !date || !type) {
+      console.log(`[Proxy Direct] Forwarding /api/observation request (no upId/date/type)`);
+      const data = await proxyToAzure('/api/observation', req.body);
+      return res.json(data);
+    }
+    
+    // 1. Check SQLite cache first
+    const cached = await dbService.getObservations(upId, date, type);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    // 2. Enqueue cache-miss to prevent concurrent duplicate calls and rate-limiting
+    const data = await enqueueRequest('/api/observation', req.body, async () => {
+      const fetched = await proxyToAzure('/api/observation', req.body);
+      // Cache fetched raw data to SQLite
+      await dbService.saveObservations(upId, date, type, fetched);
+      return fetched;
+    });
+    
     res.json(data);
   } catch (error) {
     console.error(`[Error] Observation proxy failed:`, error.message);
@@ -132,11 +152,32 @@ app.post('/api/observation', async (req, res) => {
  */
 app.post('/api/outage', async (req, res) => {
   try {
-    console.log(`[Proxy] Forwarding /api/outage request for: ${req.body.upname || 'unknown'}`);
-    const data = await proxyToAzure('/api/outage', req.body);
+    const { upId, startDate, endDate } = req.body;
+    if (!upId || !startDate || !endDate) {
+      console.log(`[Proxy Direct] Forwarding /api/outage request (no upId/startDate/endDate)`);
+      const data = await proxyToAzure('/api/outage', req.body);
+      return res.json(data);
+    }
+
+    const data = await enqueueRequest('/api/outage', req.body, async () => {
+      return await proxyToAzure('/api/outage', req.body);
+    });
     res.json(data);
   } catch (error) {
     console.error(`[Error] Outage proxy failed:`, error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Queue status query endpoint
+ */
+app.get('/api/queue/status', (req, res) => {
+  try {
+    const { upId, date, type, startDate, endDate } = req.query;
+    const status = getQueueStatus(upId, date, type, startDate, endDate);
+    res.json(status);
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });

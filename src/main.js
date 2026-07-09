@@ -90,6 +90,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     await fetchPPATagsFromServer();
     await initDB();
     console.log("[App] Backend central database and DB proxy initialized.");
+    startQueueStatusPoller();
   } catch (err) {
     console.error(err);
     alert("Impossibile inizializzare il database centralizzato. L'applicazione potrebbe mostrare dati incompleti.");
@@ -1958,6 +1959,62 @@ function updateSyncUI() {
       barFill.style.width = "0%";
       barText.innerText = "Nessuna sincronizzazione in corso";
     }
+  }
+}
+
+let queuePollInterval = null;
+
+/**
+ * Starts a background poller to query the backend request queue status.
+ */
+function startQueueStatusPoller() {
+  if (queuePollInterval) return;
+  
+  const poll = async () => {
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      
+      // Pass parameters if current view is a detail observation to get position
+      let queryParams = "";
+      if (state.view === "detail" && state.selectedUP && state.selectedDate) {
+        queryParams = `?upId=${state.selectedUP}&date=${state.selectedDate}&type=scada`;
+      }
+      
+      const response = await fetch(`${apiUrl}/api/queue/status${queryParams}`);
+      if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+      const data = await response.json();
+      
+      updateQueueStatusUI(data);
+    } catch (err) {
+      console.warn("[Queue Poller] Failed to query status:", err.message);
+    }
+  };
+  
+  poll();
+  queuePollInterval = setInterval(poll, 1500);
+}
+
+/**
+ * Draws the queue status banner in the left sidebar.
+ */
+function updateQueueStatusUI(statusData) {
+  const badge = document.getElementById("queue-status-badge");
+  const title = document.getElementById("queue-status-title");
+  const desc = document.getElementById("queue-status-desc");
+  
+  if (!badge || !title || !desc) return;
+  
+  if (statusData.queueLength > 0) {
+    badge.style.display = "flex";
+    title.innerText = `CODA SERVER: ${statusData.queueLength}`;
+    
+    if (statusData.position > 0) {
+      desc.innerHTML = `La tua richiesta è in coda<br><strong style="color: #60a5fa;">Posizione: #${statusData.position}</strong>`;
+    } else {
+      desc.innerHTML = `<strong style="color: #60a5fa;">${statusData.activeCount} in corso</strong> e ${statusData.queueLength - statusData.activeCount} in attesa`;
+    }
+  } else {
+    badge.style.display = "none";
   }
 }
 

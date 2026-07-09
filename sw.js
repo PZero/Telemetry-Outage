@@ -400,7 +400,9 @@ async function fetchObservationsFromAzure(upId, date, type) {
     update: false,
     upname: [name],
     aggregatedData: false,
-    type: type
+    type: type,
+    upId: upId,
+    date: date
   };
 
   notifyClients({
@@ -518,6 +520,7 @@ async function fetchObservationsFromAzure(upId, date, type) {
 }
 
 async function fetchOutagesFromAzure(upId, startDate, endDate) {
+  const name = currentActiveTask.upName || upId;
   const baseUrl = currentActiveTask.apiUrl || "http://localhost:3000";
   const url = `${baseUrl}/api/outage`;
   const reqBody = {
@@ -525,7 +528,10 @@ async function fetchOutagesFromAzure(upId, startDate, endDate) {
     toDate_UTC: `${endDate}T23:59:59+0000`,
     limitationType: "ACTUALFACILITY, FACILITY, ACTUALGRID, GRID, ODD",
     upname: [name],
-    provider: []
+    provider: [],
+    upId: upId,
+    startDate: startDate,
+    endDate: endDate
   };
 
   notifyClients({
