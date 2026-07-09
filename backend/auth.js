@@ -25,6 +25,12 @@ async function syncAndGetUserRole(email, name) {
       user = { email, name, role };
       console.log(`[Auth] Registered new user: ${email} with role: ${role}`);
     } else {
+      // Update name if retrieved from Google and different/not set
+      if (name && user.name !== name) {
+        user.name = name;
+        await dbService.saveUser(email, name, user.role);
+        console.log(`[Auth] Updated user name in database to Google profile name: ${name}`);
+      }
       // Force fnicora@gmail.com to always be admin
       if (email === 'fnicora@gmail.com' && user.role !== 'admin') {
         user.role = 'admin';

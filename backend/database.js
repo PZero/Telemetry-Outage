@@ -152,7 +152,12 @@ async function initializeTables() {
     await dbRun(`
       INSERT OR IGNORE INTO users (email, name, role, created_at)
       VALUES (?, ?, ?, datetime('now'))
-    `, ['fnicora@gmail.com', 'Francesco Nicora', 'admin']);
+    `, ['fnicora@gmail.com', 'Fabio Nicora', 'admin']);
+
+    // Correct name if it was seeded as Francesco
+    await dbRun(`
+      UPDATE users SET name = 'Fabio Nicora' WHERE email = 'fnicora@gmail.com' AND name = 'Francesco Nicora'
+    `);
 
     // Seed Registry if empty
     const regCount = await dbGet('SELECT COUNT(*) as count FROM registry');
