@@ -1,0 +1,2234 @@
+// Global Error Diagnostic Boundary
+window.onerror = function(message, source, lineno, colno, error) {
+  const errText = `JS Error: ${message}\nSource: ${source}\nLine: ${lineno}:${colno}\nErrorObj: ${error ? error.stack : ''}`;
+  console.error("[Diagnostic Boundary]", errText);
+  alert(`[App Error Boundary]\nUn errore imprevisto ha bloccato l'applicazione:\n\n${message}\n\nFile: ${source.substring(source.lastIndexOf('/') + 1)} (riga ${lineno})`);
+};
+
+import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled } from "./registry.js";
+import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations } from "./db.js";
+import { isSimulatedMode, setSimulatedMode } from "./api.js";
+import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats } from "./ui.js";
+
+// Global Application State
+const state = {
+  view: "fleet", // "fleet" | "detail" | "settings"
+  selectedUP: null,
+  selectedDate: null, // format YYYY-MM-DD
+  timelineDuration: 30, // visible window: 1 to 90 days
+  timelineOffset: 60, // start day offset from 90 days ago (0 to 90)
+  filters: {
+    techWind: true,
+    techSolar: true,
+    region: "All",
+    ppaTag: "All",
+    onlyGaps: false,
+    discrepancy: false,
+    selectedUPs: new Set()
+  },
+  simulatedMode: true,
+  retentionMonths: 3,
+  syncDaysRange: 30, // days to download in admin sync
+  activeSyncTasks: {}, // track currently running sync tasks per upId|date
+  syncQueue: [],
+  totalTasks: 0,
+  completedTasks: 0,
+  isSyncRunning: false,
+  shouldCancelSync: false,
+  swRegistration: null
+};
+window.appState = state;
+
+// Date pool constants (90 days prior to 2026-07-03)
+// Dynamic date pool ending 7 days in the future from today's local date
+const POOL_END_DATE = new Date();
+POOL_END_DATE.setDate(POOL_END_DATE.getDate() + 7); 
+const POOL_START_DATE = new Date();
+POOL_START_DATE.setDate(POOL_START_DATE.getDate() - 90); 
+
+// Generate array of YYYY-MM-DD dates using local timezone formatting
+const DATE_POOL = [];
+for (let d = new Date(POOL_START_DATE); d <= POOL_END_DATE; d.setDate(d.getDate() + 1)) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  DATE_POOL.push(`${year}-${month}-${day}`);
+}
+
+/**
+ * Bootstraps the application.
+ */
+window.addEventListener("DOMContentLoaded", async () => {
+  console.log("[App] Booting Telemetry & Outage Integrity PWA...");
+  
+  // 1. Initialize IndexedDB
+  try {
+    await initDB();
+    console.log("[App] IndexedDB initialized.");
+  } catch (err) {
+    alert("Impossibile caricare IndexedDB localmente: l'applicazione potrebbe non salvare i dati.");
+  }
+
+  // 2. Register Service Worker
+  await registerServiceWorker();
+
+  // Calculate dynamic default duration: 1 full calendar month ending yesterday (D-1)
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yYear = yesterday.getFullYear();
+  const yMonth = String(yesterday.getMonth() + 1).padStart(2, "0");
+  const yDay = String(yesterday.getDate()).padStart(2, "0");
+  const yesterdayStr = `${yYear}-${yMonth}-${yDay}`;
+  const yesterdayIdx = DATE_POOL.indexOf(yesterdayStr);
+
+  const startOfWindow = new Date(yesterday);
+  startOfWindow.setMonth(startOfWindow.getMonth() - 1);
+
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const yesterdayUTC = Date.UTC(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate());
+  const startUTC = Date.UTC(startOfWindow.getFullYear(), startOfWindow.getMonth(), startOfWindow.getDate());
+  const diffDays = Math.round((yesterdayUTC - startUTC) / oneDayMs) + 1;
+
+  state.timelineDuration = diffDays;
+  if (yesterdayIdx !== -1) {
+    state.timelineOffset = Math.max(0, yesterdayIdx + 1 - state.timelineDuration);
+  } else {
+    state.timelineOffset = Math.max(0, DATE_POOL.length - state.timelineDuration - 7);
+  }
+
+  // Dynamically update the value of the "1 Mese" option in the duration selector to match diffDays
+  const durationSelect = document.getElementById("timeline-duration-select");
+  if (durationSelect) {
+    const oneMonthOpt = durationSelect.querySelector('option[value="30"]');
+    if (oneMonthOpt) {
+      oneMonthOpt.value = diffDays;
+      oneMonthOpt.innerText = `1 Mese (${diffDays} gg)`;
+    }
+  }
+
+  // 3. Initialize UI states and filters safely
+  try {
+    setupFilters();
+  } catch (err) {
+    console.error("[Bootstrap] setupFilters failed:", err);
+  }
+
+  try {
+    setupTimelineControls();
+  } catch (err) {
+    console.error("[Bootstrap] setupTimelineControls failed:", err);
+  }
+
+  try {
+    setupSettingsHandlers();
+  } catch (err) {
+    console.error("[Bootstrap] setupSettingsHandlers failed:", err);
+  }
+
+  try {
+    setupViewRouting();
+  } catch (err) {
+    console.error("[Bootstrap] setupViewRouting failed:", err);
+  }
+
+  try {
+    setupPPAHandlers();
+  } catch (err) {
+    console.error("[Bootstrap] setupPPAHandlers failed:", err);
+  }
+
+  try {
+    setupSidebarToggle();
+  } catch (err) {
+    console.error("[Bootstrap] setupSidebarToggle failed:", err);
+  }
+  // 4. Handle window resizing to keep heatmap responsive and fit container width
+  window.addEventListener("resize", () => {
+    if (state.view === "fleet") {
+      triggerFleetRedrawThrottled();
+    }
+  });
+
+  // 5. Load initial view
+  updatePersistenceBadge();
+  applyFiltersAndRender();
+
+  // 6. Auto-sync yesterday's data (D-1) on open (after a 2s delay)
+  setTimeout(() => {
+    triggerYesterdaySync(true);
+  }, 2000);
+});
+
+/**
+ * Registers PWA Service Worker.
+ */
+
+async function registerServiceWorker() {
+  if ("serviceWorker" in navigator) {
+    try {
+      const reg = await navigator.serviceWorker.register("./sw.js");
+      state.swRegistration = reg;
+      console.log("[SW] Service Worker registered in scope:", reg.scope);
+
+      // Auto-reload on updates to bypass cache-first locks immediately
+      reg.addEventListener("updatefound", () => {
+        const newWorker = reg.installing;
+        if (newWorker) {
+          newWorker.addEventListener("statechange", () => {
+            if (newWorker.state === "activated") {
+              console.log("[SW] New Service Worker activated. Reloading view...");
+              window.location.reload();
+            }
+          });
+        }
+      });
+
+      // Listen for message events from sw.js
+      navigator.serviceWorker.addEventListener("message", handleServiceWorkerMessage);
+
+      // Trigger initial status check
+      sendSWMessage({ action: "GET_STATUS" });
+
+    } catch (err) {
+      console.warn("[SW] Service Worker registration failed:", err);
+    }
+  } else {
+    console.warn("[SW] Service Worker not supported in this browser.");
+  }
+}
+
+/**
+ * Safely posts a message to the Service Worker even if not yet controlling the page
+ */
+function sendSWMessage(message) {
+  const worker = navigator.serviceWorker.controller || 
+                 (state.swRegistration && state.swRegistration.active) || 
+                 (state.swRegistration && state.swRegistration.waiting);
+  if (worker) {
+    worker.postMessage(message);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Handles communication received from Service Worker.
+ */
+function handleServiceWorkerMessage(event) {
+  const data = event.data;
+  if (!data) return;
+
+  if (data.type === "TOKEN_REFRESH_REQUEST") {
+    forceRefreshAzureToken().then(newToken => {
+      sendSWMessage({
+        type: "TOKEN_REFRESH_RESPONSE",
+        messageId: data.messageId,
+        token: newToken
+      });
+    });
+    return;
+  }
+
+  if (data.type !== "SYNC_STATUS") return;
+
+  // Print logs sent by SW fetch calls to the Settings Console
+  const consolePre = document.getElementById("console-logs");
+  if (consolePre && data.log) {
+    const timestamp = new Date().toLocaleTimeString();
+    consolePre.textContent += `[${timestamp}] ${data.log}\n`;
+    consolePre.scrollTop = consolePre.scrollHeight;
+  }
+}/**
+ * Calculates date range visible based on offset and duration sliders.
+ */
+function getActiveDateRange() {
+  const startIdx = Math.max(0, Math.min(DATE_POOL.length - 1, state.timelineOffset));
+  const endIdx = Math.min(DATE_POOL.length, startIdx + state.timelineDuration);
+  return DATE_POOL.slice(startIdx, endIdx);
+}
+
+/**
+ * Sets up timeline controls (duration, sliding dates).
+ */
+function setupTimelineControls() {
+  const durationSelect = document.getElementById("timeline-duration-select");
+  const slider = document.getElementById("timeline-range-slider");
+  const picker = document.getElementById("timeline-date-picker");
+
+  // Duration sets window size
+  durationSelect.addEventListener("change", (e) => {
+    state.timelineDuration = parseInt(e.target.value, 10);
+    // Ensure offset + duration doesn't overrun DATE_POOL
+    if (state.timelineOffset + state.timelineDuration > DATE_POOL.length) {
+      state.timelineOffset = Math.max(0, DATE_POOL.length - state.timelineDuration);
+      slider.value = state.timelineOffset;
+    }
+    updateSliderRange();
+    applyFiltersAndRender();
+  });
+
+  // Slider shifts start offset
+  slider.addEventListener("input", (e) => {
+    state.timelineOffset = parseInt(e.target.value, 10);
+    updateSliderRange();
+    applyFiltersAndRender();
+  });
+
+  // Date picker selects end date of period
+  if (picker) {
+    picker.addEventListener("change", (e) => {
+      const selectedDateStr = e.target.value;
+      if (!selectedDateStr) return;
+
+      const idx = DATE_POOL.indexOf(selectedDateStr);
+      if (idx !== -1) {
+        state.timelineOffset = Math.max(0, idx - state.timelineDuration + 1);
+        slider.value = state.timelineOffset;
+        applyFiltersAndRender();
+      }
+    });
+  }
+
+  updateSliderRange();
+}
+
+function updateSliderRange() {
+  const slider = document.getElementById("timeline-range-slider");
+  const picker = document.getElementById("timeline-date-picker");
+
+  // Maximum offset is pool length minus window duration
+  const maxOffset = Math.max(0, DATE_POOL.length - state.timelineDuration);
+  slider.max = maxOffset;
+  if (state.timelineOffset > maxOffset) {
+    state.timelineOffset = maxOffset;
+    slider.value = maxOffset;
+  }
+
+  // Update date picker min/max constraints
+  if (picker) {
+    picker.min = DATE_POOL[state.timelineDuration - 1] || DATE_POOL[0];
+    picker.max = DATE_POOL[DATE_POOL.length - 1];
+  }
+
+  const range = getActiveDateRange();
+  if (range.length > 0 && picker) {
+    picker.value = range[range.length - 1];
+  }
+}
+
+function formatDateLabel(isoStr) {
+  const parts = isoStr.split("-");
+  return `${parts[2]}/${parts[1]}/${parts[0]}`;
+}
+
+/**
+ * Sets up filters in Sidebar.
+ */
+/**
+ * Populates dropdown lists in the Sidebar dynamically.
+ */
+function populateDropdowns() {
+  const regionSel = document.getElementById("filter-region");
+  const searchUpSel = document.getElementById("search-up-select");
+  const ppaSel = document.getElementById("filter-ppa");
+  if (!regionSel || !searchUpSel) return;
+
+  const oldRegion = regionSel.value || "All";
+
+  // Populate region list
+  regionSel.innerHTML = '<option value="All">Tutte le Regioni</option>';
+  UNIQUE_REGIONS.forEach(region => {
+    const opt = document.createElement("option");
+    opt.value = region;
+    opt.innerText = region;
+    regionSel.appendChild(opt);
+  });
+
+  if (UNIQUE_REGIONS.includes(oldRegion)) {
+    regionSel.value = oldRegion;
+  } else {
+    regionSel.value = "All";
+  }
+
+  // Populate PPA filter list
+  if (ppaSel) {
+    const oldPPA = ppaSel.value || "All";
+    ppaSel.innerHTML = '<option value="All">Tutti i Partner PPA</option><option value="None">Non Assegnate</option>';
+    const tags = loadPPATags();
+    tags.forEach(tag => {
+      const opt = document.createElement("option");
+      opt.value = tag.name;
+      opt.innerText = tag.name;
+      ppaSel.appendChild(opt);
+    });
+    ppaSel.value = oldPPA;
+  }
+
+  // Populate UP Search dropdown
+  searchUpSel.innerHTML = '<option value="">-- Seleziona UP per Deep-Dive --</option>';
+  const sortedUPs = [...UP_REGISTRY].sort((a, b) => a.name.localeCompare(b.name));
+  sortedUPs.forEach(up => {
+    const opt = document.createElement("option");
+    opt.value = up.id;
+    opt.innerText = `${up.name} (${up.id})`;
+    searchUpSel.appendChild(opt);
+  });
+
+  // Populate Sync UP dropdown in settings
+  const syncUpSel = document.getElementById("sync-up-select");
+  if (syncUpSel) {
+    const oldSyncUp = syncUpSel.value || "all";
+    syncUpSel.innerHTML = '<option value="all">Tutte le UP (Flotta Completa)</option>';
+    sortedUPs.forEach(up => {
+      const opt = document.createElement("option");
+      opt.value = up.id;
+      opt.innerText = `${up.name} (${up.id})`;
+      syncUpSel.appendChild(opt);
+    });
+    syncUpSel.value = oldSyncUp;
+  }
+}
+
+/**
+ * Sets up filters in Sidebar.
+ */
+function renderSelectedUPTags() {
+  const container = document.getElementById("selected-ups-tags");
+  if (!container) return;
+
+  if (state.filters.selectedUPs.size === 0) {
+    container.innerHTML = "";
+    return;
+  }
+
+  container.innerHTML = Array.from(state.filters.selectedUPs).map(upId => {
+    const up = getUPById(upId) || { name: upId };
+    return `
+      <span class="selected-up-tag" style="display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 12px; color: #60a5fa; font-size: 0.65rem; font-weight: 600;">
+        ${up.name}
+        <span class="remove-tag-btn" data-up-id="${upId}" style="cursor: pointer; color: #f87171; font-weight: bold; margin-left: 2px;">×</span>
+      </span>
+    `;
+  }).join("");
+
+  container.querySelectorAll(".remove-tag-btn").forEach(btn => {
+    btn.onclick = () => {
+      const upId = btn.dataset.upId;
+      state.filters.selectedUPs.delete(upId);
+      renderSelectedUPTags();
+      applyFiltersAndRender();
+    };
+  });
+}
+
+function setupFilters() {
+  const windCb = document.getElementById("filter-wind");
+  const solarCb = document.getElementById("filter-solar");
+  const regionSel = document.getElementById("filter-region");
+  const gapsCb = document.getElementById("filter-gaps");
+  const discCb = document.getElementById("filter-discrepancies");
+  const searchUpSel = document.getElementById("search-up-select");
+  const ppaSel = document.getElementById("filter-ppa");
+
+  if (!windCb || !solarCb || !regionSel || !gapsCb || !discCb || !searchUpSel) return;
+
+  populateDropdowns();
+  renderSelectedUPTags();
+
+  searchUpSel.addEventListener("change", (e) => {
+    const upId = e.target.value;
+    if (upId) {
+      state.filters.selectedUPs.add(upId);
+      searchUpSel.value = ""; // Reset select
+      renderSelectedUPTags();
+      applyFiltersAndRender();
+    }
+  });
+
+  const triggerFilterUpdate = () => {
+    state.filters.techWind = windCb.checked;
+    state.filters.techSolar = solarCb.checked;
+    state.filters.region = regionSel.value;
+    state.filters.ppaTag = ppaSel ? ppaSel.value : "All";
+    state.filters.onlyGaps = gapsCb.checked;
+    state.filters.discrepancy = discCb.checked;
+    applyFiltersAndRender();
+  };
+
+  const btnWind = document.getElementById("tech-btn-wind");
+  const btnSolar = document.getElementById("tech-btn-solar");
+
+  if (btnWind) {
+    btnWind.onclick = () => {
+      const active = btnWind.classList.toggle("active");
+      windCb.checked = active;
+      btnWind.style.background = active ? "rgba(59, 130, 246, 0.15)" : "none";
+      btnWind.style.borderColor = active ? "rgba(59, 130, 246, 0.3)" : "transparent";
+      btnWind.style.color = active ? "var(--text-main)" : "var(--text-muted)";
+      triggerFilterUpdate();
+    };
+  }
+
+  if (btnSolar) {
+    btnSolar.onclick = () => {
+      const active = btnSolar.classList.toggle("active");
+      solarCb.checked = active;
+      btnSolar.style.background = active ? "rgba(251, 191, 36, 0.15)" : "none";
+      btnSolar.style.borderColor = active ? "rgba(251, 191, 36, 0.3)" : "transparent";
+      btnSolar.style.color = active ? "var(--text-main)" : "var(--text-muted)";
+      triggerFilterUpdate();
+    };
+  }
+
+  const updatePillVisuals = (cb, activeBg, activeBorder, activeColor, inactiveBg, inactiveBorder, inactiveColor) => {
+    const label = cb.closest(".toggle-pill");
+    if (label) {
+      if (cb.checked) {
+        label.style.background = activeBg;
+        label.style.borderColor = activeBorder;
+        label.style.color = activeColor;
+      } else {
+        label.style.background = inactiveBg;
+        label.style.borderColor = inactiveBorder;
+        label.style.color = inactiveColor;
+      }
+    }
+  };
+
+  // Initialize pill visuals on load
+  updatePillVisuals(gapsCb, "rgba(239, 68, 68, 0.25)", "#ef4444", "#ffffff", "rgba(239, 68, 68, 0.04)", "rgba(239, 68, 68, 0.25)", "#f87171");
+  updatePillVisuals(discCb, "rgba(251, 191, 36, 0.25)", "#fbbf24", "#ffffff", "rgba(251, 191, 36, 0.04)", "rgba(251, 191, 36, 0.25)", "#fbbf24");
+
+  windCb.addEventListener("change", triggerFilterUpdate);
+  solarCb.addEventListener("change", triggerFilterUpdate);
+  regionSel.addEventListener("change", triggerFilterUpdate);
+  if (ppaSel) {
+    ppaSel.addEventListener("change", triggerFilterUpdate);
+  }
+  
+  gapsCb.addEventListener("change", () => {
+    updatePillVisuals(gapsCb, "rgba(239, 68, 68, 0.25)", "#ef4444", "#ffffff", "rgba(239, 68, 68, 0.04)", "rgba(239, 68, 68, 0.25)", "#f87171");
+    triggerFilterUpdate();
+  });
+  
+  discCb.addEventListener("change", () => {
+    updatePillVisuals(discCb, "rgba(251, 191, 36, 0.25)", "#fbbf24", "#ffffff", "rgba(251, 191, 36, 0.04)", "rgba(251, 191, 36, 0.25)", "#fbbf24");
+    triggerFilterUpdate();
+  });
+}
+
+/**
+ * Filters the flotta list and triggers heatmap redraw.
+ */
+async function applyFiltersAndRender() {
+  if (state.view !== "fleet" && state.view !== "stats") return;
+
+  const canvas = document.getElementById("heatmap-canvas");
+  if (state.view === "fleet" && !canvas) return;
+
+  // Filter by basic parameters
+  let filteredUPs = UP_REGISTRY.filter(up => {
+    if (up.tech === "Wind" && !state.filters.techWind) return false;
+    if (up.tech === "Solar" && !state.filters.techSolar) return false;
+    if (state.filters.region !== "All" && up.region !== state.filters.region) return false;
+    
+    // Filter by PPA Tag
+    if (state.filters.ppaTag && state.filters.ppaTag !== "All") {
+      if (state.filters.ppaTag === "None") {
+        if (up.ppaTag) return false;
+      } else {
+        if (up.ppaTag !== state.filters.ppaTag) return false;
+      }
+    }
+
+    // Filter by specific selected UPs
+    if (state.filters.selectedUPs && state.filters.selectedUPs.size > 0) {
+      if (!state.filters.selectedUPs.has(up.id)) return false;
+    }
+    return true;
+  });
+
+  const range = getActiveDateRange();
+
+  // Apply high-performance dynamic anomaly filters
+  if (state.filters.onlyGaps || state.filters.discrepancy) {
+    const statusPromises = filteredUPs.map(async (up) => {
+      for (const dateStr of range) {
+        const integrityResult = await classifyDayIntegrity(up, dateStr);
+        const integrity = integrityResult.status;
+        
+        if (state.filters.onlyGaps && integrity === "red") {
+          return { up, match: true };
+        }
+        if (state.filters.discrepancy && integrity === "orange") {
+          return { up, match: true };
+        }
+      }
+      return { up, match: false };
+    });
+
+    const results = await Promise.all(statusPromises);
+    filteredUPs = results.filter(r => r.match).map(r => r.up);
+  }
+
+  // Draw Heatmap
+  if (state.view === "fleet") {
+    renderFleetHeatmap(canvas, filteredUPs, range, handleHeatmapCellClick);
+  } else if (state.view === "stats") {
+    // Generate matrixData asynchronously to run the stats rendering
+    const allRowsPromises = filteredUPs.map(async (up) => {
+      return await Promise.all(range.map(dateStr => classifyDayIntegrity(up, dateStr)));
+    });
+    const matrixData = await Promise.all(allRowsPromises);
+    renderFleetStats(filteredUPs, range, matrixData);
+  }
+}
+
+/**
+ * Transition from Level 1 (Fleet) to Level 2/3 (UP details).
+ */
+function handleHeatmapCellClick(upId, dateStr) {
+  state.selectedUP = upId;
+  state.selectedDate = dateStr;
+  navigateToView("detail");
+}
+
+/**
+ * Navigates view panel tabs.
+ */
+function navigateToView(viewName) {
+  state.view = viewName;
+
+  document.getElementById("fleet-heatmap-view").classList.add("hidden");
+  document.getElementById("fleet-stats-view").classList.add("hidden");
+  document.getElementById("detail-deepdive-view").classList.add("hidden");
+  document.getElementById("settings-view").classList.add("hidden");
+  document.getElementById("ppa-view").classList.add("hidden");
+
+  const timelineHeader = document.querySelector(".main-header");
+  if (timelineHeader) {
+    timelineHeader.style.display = (viewName === "fleet" || viewName === "stats") ? "flex" : "none";
+  }
+
+  // Update top navbar active tab styling
+  const tabs = {
+    fleet: document.getElementById("nav-fleet-btn"),
+    stats: document.getElementById("nav-stats-btn"),
+    ppa: document.getElementById("nav-ppa-btn"),
+    settings: document.getElementById("nav-settings-btn")
+  };
+
+  Object.keys(tabs).forEach(key => {
+    const tab = tabs[key];
+    if (!tab) return;
+    if (key === viewName) {
+      tab.classList.add("active");
+      tab.style.background = "rgba(59, 130, 246, 0.1)";
+      tab.style.borderColor = "rgba(59, 130, 246, 0.2)";
+      tab.style.color = "var(--text-main)";
+    } else {
+      tab.classList.remove("active");
+      tab.style.background = "none";
+      tab.style.borderColor = "transparent";
+      tab.style.color = "var(--text-muted)";
+    }
+  });
+
+  // Show active view panel
+  if (viewName === "fleet") {
+    const searchUpSel = document.getElementById("search-up-select");
+    if (searchUpSel) searchUpSel.value = "";
+    document.getElementById("fleet-heatmap-view").classList.remove("hidden");
+    applyFiltersAndRender();
+    if (state.isSyncRunning) {
+      startHeatmapAnimation();
+    }
+  } else if (viewName === "stats") {
+    document.getElementById("fleet-stats-view").classList.remove("hidden");
+    applyFiltersAndRender();
+  } else if (viewName === "detail") {
+    document.getElementById("detail-deepdive-view").classList.remove("hidden");
+    renderDeepDivePanel();
+  } else if (viewName === "ppa") {
+    document.getElementById("ppa-view").classList.remove("hidden");
+    renderPPAPanel();
+  } else if (viewName === "settings") {
+    document.getElementById("settings-view").classList.remove("hidden");
+    updateSettingsLogs();
+    printDatabaseDiagnostics();
+  }
+}
+window.navigateToView = navigateToView;
+
+function setupViewRouting() {
+  const syncYesterdayBtn = document.getElementById("sync-yesterday-btn");
+  if (syncYesterdayBtn) {
+    syncYesterdayBtn.onclick = () => {
+      triggerYesterdaySync(false);
+    };
+  }
+
+  const fleetBtn = document.getElementById("nav-fleet-btn");
+  if (fleetBtn) fleetBtn.onclick = () => navigateToView("fleet");
+
+  const statsBtn = document.getElementById("nav-stats-btn");
+  if (statsBtn) statsBtn.onclick = () => navigateToView("stats");
+
+  const ppaBtn = document.getElementById("nav-ppa-btn");
+  if (ppaBtn) ppaBtn.onclick = () => navigateToView("ppa");
+
+  const settingsBtn = document.getElementById("nav-settings-btn");
+  if (settingsBtn) settingsBtn.onclick = () => navigateToView("settings");
+
+  const backBtn = document.getElementById("detail-back-btn");
+  if (backBtn) backBtn.onclick = () => navigateToView("fleet");
+
+  // Setup Stats Subtabs
+  const tabQualita = document.getElementById("stats-tab-qualita");
+  const tabProcessi = document.getElementById("stats-tab-processi");
+  const panelQualita = document.getElementById("stats-panel-qualita");
+  const panelProcessi = document.getElementById("stats-panel-processi");
+
+  if (tabQualita && tabProcessi && panelQualita && panelProcessi) {
+    tabQualita.onclick = () => {
+      tabQualita.classList.add("active");
+      tabProcessi.classList.remove("active");
+      panelQualita.style.display = "flex";
+      panelProcessi.classList.add("hidden");
+      applyFiltersAndRender();
+    };
+
+    tabProcessi.onclick = () => {
+      tabProcessi.classList.add("active");
+      tabQualita.classList.remove("active");
+      panelQualita.style.display = "none";
+      panelProcessi.classList.remove("hidden");
+      applyFiltersAndRender();
+    };
+  }
+
+  // Setup segmented control buttons for charts grouping
+  const btnGroup1 = document.getElementById("charts-group-1-btn");
+  const btnGroup2 = document.getElementById("charts-group-2-btn");
+  const group1 = document.getElementById("charts-group-1");
+  const group2 = document.getElementById("charts-group-2");
+
+  if (btnGroup1 && btnGroup2 && group1 && group2) {
+    btnGroup1.onclick = () => {
+      btnGroup1.classList.add("active");
+      btnGroup2.classList.remove("active");
+      group1.classList.remove("hidden");
+      group2.classList.add("hidden");
+      applyFiltersAndRender();
+    };
+
+    btnGroup2.onclick = () => {
+      btnGroup2.classList.add("active");
+      btnGroup1.classList.remove("active");
+      group1.classList.add("hidden");
+      group2.classList.remove("hidden");
+      applyFiltersAndRender();
+    };
+  }
+
+  window.navigateToDetailViewGlobal = (upId) => {
+    state.selectedUPId = upId;
+    const range = getActiveDateRange();
+    if (range && range.length > 0) {
+      state.selectedDate = range[range.length - 1];
+    }
+    navigateToView("detail");
+  };
+
+  const detailPicker = document.getElementById("detail-date-picker");
+  if (detailPicker) {
+    detailPicker.addEventListener("change", (e) => {
+      const selected = e.target.value;
+      if (selected && DATE_POOL.includes(selected)) {
+        state.selectedDate = selected;
+        renderDeepDivePanel();
+      }
+    });
+  }
+
+  const exportBtn = document.getElementById("export-table-btn");
+  if (exportBtn) {
+    exportBtn.onclick = () => {
+      if (!window.currentTableDataCsv || window.currentTableDataCsv.length <= 1) {
+        alert("Nessun dato da esportare.");
+        return;
+      }
+      const csvContent = "data:text/csv;charset=utf-8," 
+        + window.currentTableDataCsv.map(e => e.join(",")).join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      const upId = state.selectedUP || "UP";
+      link.setAttribute("download", `misure_${upId}_${state.selectedDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+  }
+}
+
+function setupSidebarToggle() {
+  const sidebar = document.querySelector(".app-sidebar");
+  const toggleBtn = document.getElementById("sidebar-toggle-btn");
+  const toggleIcon = document.getElementById("sidebar-toggle-icon");
+  
+  if (!sidebar || !toggleBtn) return;
+  
+  const isCollapsed = localStorage.getItem("sidebar-collapsed") === "true";
+  if (isCollapsed) {
+    sidebar.classList.add("collapsed");
+    if (toggleIcon) toggleIcon.innerText = "▶";
+  }
+  
+  toggleBtn.addEventListener("click", () => {
+    const collapsed = sidebar.classList.toggle("collapsed");
+    localStorage.setItem("sidebar-collapsed", collapsed);
+    if (toggleIcon) {
+      toggleIcon.innerText = collapsed ? "▶" : "◀";
+    }
+    setTimeout(() => {
+      window.dispatchEvent(new Event("resize"));
+    }, 260);
+  });
+}
+
+/**
+ * LEVEL 2 & 3: Render details for selected UP centered on date (3-day window)
+ */
+async function renderDeepDivePanel() {
+  try {
+    const upId = state.selectedUP;
+    const targetDateStr = state.selectedDate;
+
+    if (!upId || !targetDateStr) {
+      navigateToView("fleet");
+      return;
+    }
+
+    updateSettingsLogs(`[Debug DeepDive] Selezionato ID UP: "${upId}", Data: "${targetDateStr}"`);
+    let up = getUPById(upId);
+    if (!up) {
+      updateSettingsLogs(`[Debug DeepDive WARNING] UP non trovata nel registro per ID: "${upId}". Generazione fallback.`);
+      const isWind = upId.toLowerCase().includes("wind");
+      up = {
+        id: upId,
+        name: upId,
+        tech: isWind ? "Wind" : "Solar",
+        region: "Sicilia",
+        capacity: null
+      };
+    } else {
+      updateSettingsLogs(`[Debug DeepDive SUCCESS] Risolta UP nel registro -> ID: "${up.id}", Nome: "${up.name}", Tech: "${up.tech}"`);
+    }
+
+    // Header meta data
+    const picker = document.getElementById("detail-date-picker");
+    if (picker) {
+      picker.min = DATE_POOL[0];
+      picker.max = DATE_POOL[DATE_POOL.length - 1];
+      picker.value = targetDateStr;
+    }
+
+    document.getElementById("detail-up-title").innerText = `${up.name} (${up.id})`;
+    document.getElementById("detail-up-tech").innerText = up.tech;
+    document.getElementById("detail-up-region").innerText = up.region;
+    
+    const capEl = document.getElementById("detail-up-capacity");
+    if (capEl) {
+      if (up.capacity) {
+        capEl.parentElement.style.display = "inline";
+        capEl.innerText = `${up.capacity} MW`;
+      } else {
+        capEl.parentElement.style.display = "none";
+      }
+    }
+
+    const noScadaCb = document.getElementById("detail-up-noscada-cb");
+    if (noScadaCb) {
+      noScadaCb.checked = isScadaDisabled(up.id);
+      noScadaCb.onclick = (e) => {
+        setScadaDisabled(up.id, e.target.checked);
+        updateSettingsLogs(`[Registry Change] UP ${up.name} (${up.id}) impostata come ${e.target.checked ? "NON censita" : "censita"} SCADA.`);
+      };
+    }
+
+    const container = document.getElementById("detail-ribbons-container");
+    container.innerHTML = ""; // Clear
+
+    // Define 3 days window (Target-1, Target, Target+1) in local timezone
+    const parts = targetDateStr.split("-");
+    const targetDate = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+    
+    const dPrev = new Date(targetDate);
+    dPrev.setDate(dPrev.getDate() - 1);
+
+    const dNext = new Date(targetDate);
+    dNext.setDate(dNext.getDate() + 1);
+
+    const formatLocal = (d) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+
+    const daysWindow = [
+      formatLocal(dPrev),
+      targetDateStr,
+      formatLocal(dNext)
+    ].filter(dStr => DATE_POOL.includes(dStr)); // keep within bounds
+
+    // Render Ribbons for each day in window
+    for (const dayStr of daysWindow) {
+      await renderUPDailyRibbons(container, up.id, dayStr, triggerDailyForceRefetch);
+    }
+
+    // Draw Level 3: production profile chart for the main TARGET day
+    const chartCanvas = document.getElementById("profile-chart-canvas");
+    document.getElementById("chart-date-label").innerText = targetDateStr;
+    await renderProfileChart(chartCanvas, up.id, targetDateStr);
+
+    // Check if target day has API error and display banner
+    const cellStatus = await classifyDayIntegrity(up, targetDateStr);
+    const bannerEl = document.getElementById("detail-api-error-banner");
+    const msgEl = document.getElementById("detail-api-error-message");
+    if (bannerEl && msgEl) {
+      if (cellStatus.apiError && cellStatus.apiErrorMessage) {
+        bannerEl.style.display = "flex";
+        msgEl.innerText = cellStatus.apiErrorMessage;
+      } else {
+        bannerEl.style.display = "none";
+      }
+    }
+  } catch (err) {
+    console.error("[DeepDive ERROR]", err);
+    updateSettingsLogs(`[UI ERROR] Errore nel caricamento del pannello di dettaglio: ${err.message || err}`);
+  }
+}
+
+/**
+ * Triggers an immediate daily re-sync bypassing caches.
+ */
+async function triggerDailyForceRefetch(upId, dateStr) {
+  const up = getUPById(upId);
+  if (!up) return;
+
+  // Visual feedback overlay active (if in detail view)
+  const dayBlock = document.querySelector(`.ribbon-day-block[data-date="${dateStr}"]`);
+  const overlay = dayBlock ? dayBlock.querySelector(".ribbon-loading-overlay") : null;
+  if (overlay) overlay.classList.add("active");
+
+  const taskKey = `${upId}|${dateStr}`;
+  state.activeSyncTasks[taskKey] = true;
+  
+  // Set isSyncRunning to true and start animation if in fleet view
+  const prevSyncRunning = state.isSyncRunning;
+  state.isSyncRunning = true;
+  
+  if (state.view === "fleet") {
+    startHeatmapAnimation();
+    if (window.redrawHeatmapCached) {
+      window.redrawHeatmapCached();
+    }
+  }
+
+  // Auto-refresh token if credentials are set
+  await autoRefreshAzureToken();
+
+  const token = localStorage.getItem("azure_api_token") || "";
+  const simMode = isSimulatedMode();
+
+  try {
+    updateSettingsLogs(`[Daily Refetch] Avvio re-sync immediato per ${up.name} in data ${dateStr}...`);
+    
+    // Process single tasks sequentially in the main thread
+    await sendTaskToSW({ upId, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+    await sendTaskToSW({ upId, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: isScadaDisabled(upId) });
+    await sendTaskToSW({ upId, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+    
+    updateSettingsLogs(`[Daily Refetch] Re-sync completato per ${up.name}.`);
+  } catch (err) {
+    updateSettingsLogs(`[Daily Refetch ERROR] Sincronizzazione fallita: ${err.message || err}`);
+  } finally {
+    delete state.activeSyncTasks[taskKey];
+    state.isSyncRunning = prevSyncRunning; // Restore previous sync state
+    
+    if (overlay) overlay.classList.remove("active");
+    
+    // Refresh this cell in the cache
+    if (window.refreshCellStatusCached) {
+      await window.refreshCellStatusCached(upId, dateStr);
+    }
+    
+    if (state.view === "detail" && state.selectedUP === upId) {
+      await renderDeepDivePanel();
+    }
+  }
+}
+window.triggerDailyForceRefetchGlobal = triggerDailyForceRefetch;
+
+/**
+ * OAuth2 Client Credentials token fetcher
+ */
+async function runTokenAcquisition(tenantId, clientId, clientSecret, scope) {
+  if (!tenantId || !clientId || !clientSecret || !scope) {
+    throw new Error("Tutti i campi credenziali sono richiesti per acquisire il token.");
+  }
+  
+  const tokenUrl = `/oauth-proxy/${tenantId}/oauth2/v2.0/token`;
+  const bodyParams = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
+    scope: scope
+  });
+
+  const response = await fetch(tokenUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: bodyParams.toString()
+  });
+
+  if (!response.ok) {
+    const errorDetails = await response.text();
+    throw new Error(`Richiesta token fallita (HTTP ${response.status}): ${errorDetails}`);
+  }
+
+  const data = await response.json();
+  if (data && data.access_token) {
+    localStorage.setItem("azure_api_token", data.access_token);
+    
+    // Save credentials in storage
+    localStorage.setItem("azure_tenant_id", tenantId);
+    localStorage.setItem("azure_client_id", clientId);
+    localStorage.setItem("azure_client_secret", clientSecret);
+    localStorage.setItem("azure_scope", scope);
+
+    // Save expiration timestamp
+    const expiresAt = Date.now() + (data.expires_in || 3599) * 1000;
+    localStorage.setItem("azure_token_expires_at", expiresAt);
+
+    return data.access_token;
+  } else {
+    throw new Error("Nessun access_token presente nella risposta di Azure AD.");
+  }
+}
+
+/**
+ * Automates token refreshing during sync runs
+ */
+async function autoRefreshAzureToken() {
+  const simMode = isSimulatedMode();
+  if (simMode) return;
+
+  const expiresAt = parseInt(localStorage.getItem("azure_token_expires_at") || "0", 10);
+  // Skip renewal if token is still valid for > 5 minutes
+  if (expiresAt && Date.now() < expiresAt - 300 * 1000) {
+    return;
+  }
+
+  const tenantId = localStorage.getItem("azure_tenant_id") || "";
+  const clientId = localStorage.getItem("azure_client_id") || "";
+  const clientSecret = localStorage.getItem("azure_client_secret") || "";
+  const scope = localStorage.getItem("azure_scope") || "";
+
+  if (tenantId && clientId && clientSecret && scope) {
+    updateSettingsLogs("Rinnovo token automatico in corso...");
+    try {
+      const token = await runTokenAcquisition(tenantId, clientId, clientSecret, scope);
+      const tokenIn = document.getElementById("api-token-input");
+      if (tokenIn) tokenIn.value = token;
+      updateSettingsLogs("Token Azure AD rinnovato con successo.");
+    } catch (err) {
+      updateSettingsLogs(`ERRORE rinnovo automatico token: ${err.message}`);
+    }
+  }
+}
+
+/**
+ * Force refresh Azure token bypassing validity checks
+ */
+async function forceRefreshAzureToken() {
+  const simMode = isSimulatedMode();
+  if (simMode) return null;
+
+  const tenantId = localStorage.getItem("azure_tenant_id") || "";
+  const clientId = localStorage.getItem("azure_client_id") || "";
+  const clientSecret = localStorage.getItem("azure_client_secret") || "";
+  const scope = localStorage.getItem("azure_scope") || "";
+
+  if (tenantId && clientId && clientSecret && scope) {
+    updateSettingsLogs("[401 Rilevato] Rinnovo token forzato in corso...");
+    try {
+      const token = await runTokenAcquisition(tenantId, clientId, clientSecret, scope);
+      const tokenIn = document.getElementById("api-token-input");
+      if (tokenIn) tokenIn.value = token;
+      updateSettingsLogs("Token Azure AD rinnovato con successo.");
+      return token;
+    } catch (err) {
+      updateSettingsLogs(`ERRORE rinnovo forzato token: ${err.message}`);
+    }
+  }
+  return null;
+}
+
+/**
+ * Configuration & Administration Panel handlers.
+ */
+function setupSettingsHandlers() {
+  const retSel = document.getElementById("retention-policy-select");
+  const simCb = document.getElementById("api-simulation-cb");
+  if (!retSel || !simCb) return;
+  
+  const tenantIn = document.getElementById("api-tenant-input");
+  const clientIn = document.getElementById("api-client-input");
+  const secretIn = document.getElementById("api-secret-input");
+  const scopeIn = document.getElementById("api-scope-input");
+  const acquireBtn = document.getElementById("acquire-token-btn");
+  const tokenIn = document.getElementById("api-token-input");
+  
+  const startSyncBtn = document.getElementById("start-sync-btn");
+  const syncDaysSel = document.getElementById("sync-days-select");
+  const clearBtn = document.getElementById("clear-db-btn");
+
+  const confirmModal = document.getElementById("confirm-clear-modal");
+  const confirmYes = document.getElementById("modal-confirm-btn");
+  const confirmNo = document.getElementById("modal-cancel-btn");
+
+  // Load saved configurations
+  retSel.value = state.retentionMonths;
+  simCb.checked = isSimulatedMode();
+  
+  tenantIn.value = localStorage.getItem("azure_tenant_id") || "";
+  clientIn.value = localStorage.getItem("azure_client_id") || "";
+  secretIn.value = localStorage.getItem("azure_client_secret") || "";
+  scopeIn.value = localStorage.getItem("azure_scope") || "";
+  tokenIn.value = localStorage.getItem("azure_api_token") || "";
+
+  // Credentials fields are always enabled to allow editing configuration at any time.
+  simCb.addEventListener("change", (e) => {
+    setSimulatedMode(e.target.checked);
+  });
+
+  tenantIn.addEventListener("input", (e) => localStorage.setItem("azure_tenant_id", e.target.value.trim()));
+  clientIn.addEventListener("input", (e) => localStorage.setItem("azure_client_id", e.target.value.trim()));
+  secretIn.addEventListener("input", (e) => localStorage.setItem("azure_client_secret", e.target.value.trim()));
+  scopeIn.addEventListener("input", (e) => localStorage.setItem("azure_scope", e.target.value.trim()));
+
+  acquireBtn.onclick = async () => {
+    updateSettingsLogs("Richiesta acquisizione token avviata...");
+    acquireBtn.disabled = true;
+    try {
+      const token = await runTokenAcquisition(
+        tenantIn.value.trim(),
+        clientIn.value.trim(),
+        secretIn.value.trim(),
+        scopeIn.value.trim()
+      );
+      tokenIn.value = token;
+      updateSettingsLogs("Token Azure AD acquisito con successo ed impostato per le chiamate API.");
+      alert("Token Azure AD acquisito con successo!");
+    } catch (err) {
+      updateSettingsLogs(`ERRORE acquisizione token: ${err.message}`);
+      alert(`Errore acquisizione token: ${err.message}`);
+    } finally {
+      acquireBtn.disabled = false;
+    }
+  };
+
+  retSel.addEventListener("change", async (e) => {
+    state.retentionMonths = parseInt(e.target.value, 10);
+    // Enforce retention policy immediately
+    await enforceRetentionPolicy();
+  });
+
+  // Clear Database logic with confirmation modal
+  clearBtn.onclick = () => confirmModal.classList.add("active");
+  confirmNo.onclick = () => confirmModal.classList.remove("active");
+  confirmYes.onclick = async () => {
+    confirmModal.classList.remove("active");
+    await clearDatabase();
+    updateSettingsLogs("Archivio svuotato con successo.");
+    // Clear sync progress bar
+    document.getElementById("sync-progress-fill").style.width = "0%";
+    document.getElementById("sync-progress-text").innerText = "Nessuna sincronizzazione in corso";
+    sendSWMessage({ action: "CANCEL_SYNC" });
+  };
+
+  const unregisterSwBtn = document.getElementById("unregister-sw-btn");
+  if (unregisterSwBtn) {
+    unregisterSwBtn.onclick = async () => {
+      try {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        let count = 0;
+        for (const reg of registrations) {
+          await reg.unregister();
+          count++;
+        }
+        updateSettingsLogs(`[SW Manager] Disinstallati ${count} Service Worker attivi.`);
+        alert(`Disinstallati con successo ${count} Service Worker. La pagina verrà ricaricata.`);
+        window.location.reload();
+      } catch (err) {
+        updateSettingsLogs(`[SW Manager ERROR] Errore disinstallazione: ${err.message}`);
+        alert(`Errore durante la disinstallazione: ${err.message}`);
+      }
+    };
+  }
+
+  const startSelectiveSyncBtn = document.getElementById("start-selective-sync-btn");
+
+  // Mass Sync trigger
+  startSyncBtn.onclick = () => {
+    const daysToSync = parseInt(syncDaysSel.value, 10);
+    state.syncDaysRange = daysToSync;
+    triggerMassHistoricalSync(false); // Mass Sync (Overwrite)
+  };
+
+  if (startSelectiveSyncBtn) {
+    startSelectiveSyncBtn.onclick = () => {
+      const daysToSync = parseInt(syncDaysSel.value, 10);
+      state.syncDaysRange = daysToSync;
+      triggerMassHistoricalSync(true); // Selective Sync (Gap Recovery)
+    };
+  }
+
+  const stopSyncBtn = document.getElementById("stop-sync-btn");
+  if (stopSyncBtn) {
+    stopSyncBtn.onclick = () => {
+      state.shouldCancelSync = true;
+      updateSettingsLogs("Richiesta interruzione sincronizzazione ricevuta. Il processo si arresterà al prossimo intervallo.");
+    };
+  }
+
+  const clearLogsBtn = document.getElementById("clear-logs-btn");
+  if (clearLogsBtn) {
+    clearLogsBtn.onclick = () => {
+      const consolePre = document.getElementById("console-logs");
+      if (consolePre) {
+        consolePre.textContent = "";
+      }
+    };
+  }
+
+  // Custom Fleet Import logic
+  const fleetTextarea = document.getElementById("fleet-import-textarea");
+  const saveFleetBtn = document.getElementById("save-fleet-import-btn");
+  const resetFleetBtn = document.getElementById("reset-fleet-import-btn");
+
+  // Load existing raw custom text if stored
+  if (fleetTextarea) {
+    fleetTextarea.value = localStorage.getItem("custom_up_raw_text") || "";
+  }
+
+  if (saveFleetBtn) {
+    saveFleetBtn.onclick = () => {
+      const rawText = fleetTextarea.value.trim();
+      if (!rawText) {
+        alert("Inserisci o incolla una lista di nomi prima di salvare.");
+        return;
+      }
+
+      const lines = rawText.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+      const customList = [];
+
+      lines.forEach((line, idx) => {
+        if (line.includes(";")) {
+          // Extended format: Name;Tech;Region;Capacity
+          const parts = line.split(";").map(p => p.trim());
+          const name = parts[0];
+          const tech = (parts[1] && parts[1].toLowerCase() === "wind") ? "Wind" : "Solar";
+          const region = parts[2] || "Sicilia";
+          const capacity = parseFloat(parts[3]) || null;
+          const id = `UP_C_${String(idx + 1).padStart(2, '0')}`;
+          customList.push({
+            id,
+            name,
+            tech,
+            region,
+            capacity,
+            lat: 37.0 + ((idx * 13) % 100) / 15,
+            lon: 12.0 + ((idx * 17) % 100) / 18
+          });
+        } else {
+          // Name-only format
+          const name = line;
+          const lowerName = name.toLowerCase();
+          let tech = "Solar";
+          if (lowerName.includes("wind") || lowerName.includes("eolico") || lowerName.includes("pala") || lowerName.includes("vento") || lowerName.includes("turbina")) {
+            tech = "Wind";
+          }
+          const id = `UP_C_${String(idx + 1).padStart(2, '0')}`;
+          customList.push({
+            id,
+            name,
+            tech,
+            region: "Sicilia", // default
+            capacity: null,
+            lat: 37.0 + ((idx * 13) % 100) / 15,
+            lon: 12.0 + ((idx * 17) % 100) / 18
+          });
+        }
+      });
+
+      if (customList.length === 0) {
+        alert("Nessuna UP valida estratta dal testo inserito.");
+        return;
+      }
+
+      // Save to localStorage
+      localStorage.setItem("custom_up_raw_text", rawText);
+      localStorage.setItem("custom_up_registry", JSON.stringify(customList));
+
+      // Reload global registry
+      import("./registry.js").then(module => {
+        module.loadUPRegistry();
+        
+        // Re-populate region and search dropdowns in Sidebar
+        populateDropdowns();
+        
+        updateSettingsLogs(`Flotta UP personalizzata importata con successo. Caricate ${customList.length} UP.`);
+        alert(`Flotta importata con successo! Caricate ${customList.length} UP.`);
+        applyFiltersAndRender();
+      });
+    };
+  }
+
+  if (resetFleetBtn) {
+    resetFleetBtn.onclick = () => {
+      if (confirm("Sei sicuro di voler ripristinare la flotta di default (100 UP)?")) {
+        localStorage.removeItem("custom_up_raw_text");
+        localStorage.removeItem("custom_up_registry");
+        if (fleetTextarea) fleetTextarea.value = "";
+
+        import("./registry.js").then(module => {
+          module.loadUPRegistry();
+          populateDropdowns();
+          updateSettingsLogs("Flotta UP ripristinata ai valori predefiniti (100 UP).");
+          alert("Flotta ripristinata ai valori predefiniti!");
+          applyFiltersAndRender();
+        });
+      }
+    };
+  }
+}
+
+async function enforceRetentionPolicy() {
+  const limitDate = new Date();
+  limitDate.setMonth(limitDate.getMonth() - state.retentionMonths);
+  const limitDateStr = limitDate.toISOString().split("T")[0];
+
+  const results = await deleteOlderThan(limitDateStr);
+  updateSettingsLogs(`Cancellazione Retention Policy eseguita. Rimossi record anteriori al ${limitDateStr} (Obs: ${results.observations}, Outages: ${results.outages})`);
+}
+
+/**
+ * Triggers background mass historical sync.
+ */
+async function triggerMassHistoricalSync(isSelective = false) {
+  if (state.isSyncRunning) {
+    alert("Una sincronizzazione storica è già in corso. Attendi il completamento o arrestala.");
+    return;
+  }
+
+  const rangeDays = state.syncDaysRange;
+  console.log(`[Sync] Initiating historical sync queue for the last ${rangeDays} days (Selective: ${isSelective})...`);
+
+  // Refresh token if needed
+  await autoRefreshAzureToken();
+
+  // Compute date array for the sync window (starting from D-1 going backwards)
+  const syncDates = [];
+  const startDay = new Date();
+  startDay.setDate(startDay.getDate() - 1); // Start from D-1 (yesterday)
+
+  for (let i = 0; i < rangeDays; i++) {
+    const d = new Date(startDay);
+    d.setDate(d.getDate() - i);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    syncDates.push(`${year}-${month}-${day}`);
+  }
+
+  const tasks = [];
+  const token = localStorage.getItem("azure_api_token") || "";
+  const simMode = isSimulatedMode();
+
+
+
+  updateSettingsLogs("Preparazione del piano di sincronizzazione...");
+  if (isSelective) {
+    updateSettingsLogs("[Recupero Gap] Verifica dei dati già presenti a database in corso...");
+  }
+
+  const syncUpSel = document.getElementById("sync-up-select");
+  const selectedUpId = syncUpSel ? syncUpSel.value : "all";
+
+  const targetUPs = (selectedUpId === "all") 
+    ? UP_REGISTRY 
+    : UP_REGISTRY.filter(up => up.id === selectedUpId);
+
+  for (const up of targetUPs) {
+    for (const dateStr of syncDates) {
+      if (isSelective) {
+        const noScada = isScadaDisabled(up.id);
+        
+        if (noScada) {
+          const meterObs = await getObservations(up.id, dateStr, "meter");
+          const meterComplete = meterObs && !meterObs.includes(null);
+          if (meterComplete) {
+            // Meter is complete and SCADA is intentionally disabled. Nothing to sync!
+            continue;
+          }
+        } else {
+          // Standard check: classify day integrity first
+          const integrityResult = await classifyDayIntegrity(up, dateStr);
+          const integrity = integrityResult.status;
+          if (integrity === "green" || integrity === "grey") {
+            // No unjustified gaps! Skip completely.
+            continue;
+          }
+        }
+
+        // It has gaps (red or orange), check which specific streams are missing or contain nulls
+        const meterObs = await getObservations(up.id, dateStr, "meter");
+        const meterHasNulls = !meterObs || meterObs.includes(null);
+
+        if (meterHasNulls) {
+          tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+        }
+        
+        if (!noScada) {
+          const scadaObs = await getObservations(up.id, dateStr, "scada");
+          const scadaHasNulls = !scadaObs || scadaObs.includes(null);
+          if (scadaHasNulls) {
+            tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
+          }
+        }
+        
+        // Always query outages for days with gaps to ensure list is in sync
+        tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+      } else {
+        // Mass sync: always push everything
+        tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+        tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: isScadaDisabled(up.id) });
+        tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+      }
+    }
+  }
+
+  if (tasks.length === 0) {
+    updateSettingsLogs("Sincronizzazione completata: tutti i dati sono già presenti a database!");
+    alert("Tutti i dati sono già presenti nel database locale!");
+    return;
+  }
+
+  state.syncQueue = tasks;
+  state.totalTasks = tasks.length;
+  state.completedTasks = 0;
+  state.isSyncRunning = true;
+  state.shouldCancelSync = false;
+
+  updateSettingsLogs(`Generati ${tasks.length} task di sincronizzazione storica (${isSelective ? "Selettiva/Gap" : "Massiva/Riscrivi"}). Avvio elaborazione in corso...`);
+  runMainSyncQueue();
+}
+
+async function triggerUPSync(upId, isSelective = true) {
+  const range = getActiveDateRange();
+  if (!range || range.length === 0) return;
+
+  const up = getUPById(upId);
+  if (!up) return;
+
+  console.log(`[Sync] Initiating historical sync queue for UP ${up.name} (${upId}), for the active range: ${range[0]} to ${range[range.length-1]} (Selective: ${isSelective})...`);
+
+  // Refresh token if needed
+  await autoRefreshAzureToken();
+
+  const tasks = [];
+  const token = localStorage.getItem("azure_api_token") || "";
+  const simMode = isSimulatedMode();
+  const noScada = isScadaDisabled(up.id);
+
+  updateSettingsLogs(`Preparazione piano recupero dati per UP ${up.name}...`);
+
+  for (const dateStr of range) {
+    if (isSelective) {
+      if (noScada) {
+        const meterObs = await getObservations(up.id, dateStr, "meter");
+        const meterComplete = meterObs && !meterObs.includes(null);
+        if (meterComplete) {
+          continue;
+        }
+      } else {
+        const integrityResult = await classifyDayIntegrity(up, dateStr);
+        const integrity = integrityResult.status;
+        if (integrity === "green" || integrity === "grey") {
+          continue;
+        }
+      }
+
+      // Check which streams are missing or contain nulls
+      const meterObs = await getObservations(up.id, dateStr, "meter");
+      const meterHasNulls = !meterObs || meterObs.includes(null);
+
+      if (meterHasNulls) {
+        tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+      }
+      
+      if (!noScada) {
+        const scadaObs = await getObservations(up.id, dateStr, "scada");
+        const scadaHasNulls = !scadaObs || scadaObs.includes(null);
+        if (scadaHasNulls) {
+          tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
+        }
+      }
+      
+      tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+    } else {
+      // Rewrite sync: push everything
+      tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+      tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada });
+      tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+    }
+  }
+
+  // De-duplicate tasks against the currently running queue
+  const existingKeys = new Set(state.syncQueue.map(t => `${t.upId}_${t.date}_${t.type}`));
+  const uniqueTasks = tasks.filter(t => !existingKeys.has(`${t.upId}_${t.date}_${t.type}`));
+
+  if (uniqueTasks.length === 0) {
+    if (state.isSyncRunning) {
+      updateSettingsLogs(`Recupero per UP ${up.name}: tutti i compiti sono già in coda o completati.`);
+      showToastNotification(`UP ${up.name} è già in coda o completata`);
+    } else {
+      alert(`Tutti i dati per l'unità ${up.name} sono già completi nell'intervallo selezionato!`);
+    }
+    return;
+  }
+
+  if (state.isSyncRunning) {
+    // Append to existing queue
+    state.syncQueue.push(...uniqueTasks);
+    state.totalTasks += uniqueTasks.length;
+    updateSettingsLogs(`Accodati ${uniqueTasks.length} nuovi compiti di sincronizzazione per UP ${up.name} alla coda attiva.`);
+    showToastNotification(`Accodati ${uniqueTasks.length} task per ${up.name}`);
+  } else {
+    // Start new sync queue
+    state.syncQueue = uniqueTasks;
+    state.totalTasks = uniqueTasks.length;
+    state.completedTasks = 0;
+    state.isSyncRunning = true;
+    state.shouldCancelSync = false;
+    updateSettingsLogs(`Generati ${uniqueTasks.length} task per UP ${up.name}. Avvio elaborazione...`);
+    showToastNotification(`Avviato recupero dati per ${up.name}`);
+    runMainSyncQueue();
+  }
+}
+
+function getYesterdayDateString() {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Rome",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const parts = formatter.formatToParts(d);
+  const year = parts.find(p => p.type === "year").value;
+  const month = parts.find(p => p.type === "month").value;
+  const day = parts.find(p => p.type === "day").value;
+  return `${year}-${month}-${day}`;
+}
+
+async function triggerYesterdaySync(isAuto = false) {
+  const yesterdayStr = getYesterdayDateString();
+  
+  // Initialize storage if new day
+  const storedDate = localStorage.getItem("yesterday_sync_date");
+  if (storedDate !== yesterdayStr) {
+    localStorage.setItem("yesterday_sync_date", yesterdayStr);
+    localStorage.setItem("yesterday_sync_completed_ups", JSON.stringify([]));
+    localStorage.setItem("yesterday_sync_status", "pending");
+  }
+
+  // If already completed for yesterday, do nothing if it's an auto-trigger
+  const status = localStorage.getItem("yesterday_sync_status");
+  if (isAuto && status === "completed") {
+    console.log(`[Auto-Sync] Yesterday's sync already completed on ${yesterdayStr}.`);
+    return;
+  }
+
+  let completedUPs = [];
+  try {
+    completedUPs = JSON.parse(localStorage.getItem("yesterday_sync_completed_ups")) || [];
+  } catch (e) {
+    completedUPs = [];
+  }
+
+  // Filter UPs that are not completed yet
+  const targetUPs = UP_REGISTRY.filter(up => !completedUPs.includes(up.id));
+
+  if (targetUPs.length === 0) {
+    localStorage.setItem("yesterday_sync_status", "completed");
+    if (!isAuto) {
+      alert("I dati di ieri per tutte le UP sono già stati scaricati con successo!");
+    }
+    return;
+  }
+
+  // Refresh token if needed
+  await autoRefreshAzureToken();
+
+  const token = localStorage.getItem("azure_api_token") || "";
+  const simMode = isSimulatedMode();
+
+  const tasks = [];
+  for (const up of targetUPs) {
+    const noScada = isScadaDisabled(up.id);
+    
+    // We always fetch METER and OUTAGES. We fetch SCADA only if not disabled.
+    tasks.push({ upId: up.id, date: yesterdayStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+    if (!noScada) {
+      tasks.push({ upId: up.id, date: yesterdayStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
+    }
+    tasks.push({ upId: up.id, date: yesterdayStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+  }
+
+  // Deduplicate against active queue
+  const existingKeys = new Set(state.syncQueue.map(t => `${t.upId}_${t.date}_${t.type}`));
+  const uniqueTasks = tasks.filter(t => !existingKeys.has(`${t.upId}_${t.date}_${t.type}`));
+
+  if (uniqueTasks.length === 0) {
+    if (!isAuto) {
+      showToastNotification("I dati di ieri sono già in coda o completati.");
+    }
+    return;
+  }
+
+  if (state.isSyncRunning) {
+    state.syncQueue.push(...uniqueTasks);
+    state.totalTasks += uniqueTasks.length;
+    updateSettingsLogs(`Accodati ${uniqueTasks.length} task per l'aggiornamento di ieri.`);
+    showToastNotification(`Accodati ${uniqueTasks.length} task di ieri`);
+  } else {
+    state.syncQueue = uniqueTasks;
+    state.totalTasks = uniqueTasks.length;
+    state.completedTasks = 0;
+    state.isSyncRunning = true;
+    state.shouldCancelSync = false;
+    updateSettingsLogs(`Avvio aggiornamento dati di ieri per ${targetUPs.length} UP (${uniqueTasks.length} task)...`);
+    showToastNotification(`Avviato aggiornamento dati di ieri`);
+    runMainSyncQueue();
+  }
+}
+
+function showToastNotification(message) {
+  const existing = document.getElementById("app-toast");
+  if (existing) existing.remove();
+
+  const toast = document.createElement("div");
+  toast.id = "app-toast";
+  toast.style.position = "fixed";
+  toast.style.bottom = "24px";
+  toast.style.right = "24px";
+  toast.style.background = "rgba(13, 16, 27, 0.95)";
+  toast.style.border = "1px solid rgba(59, 130, 246, 0.4)";
+  toast.style.borderLeft = "4px solid #3b82f6";
+  toast.style.color = "#f3f4f6";
+  toast.style.padding = "12px 20px";
+  toast.style.borderRadius = "8px";
+  toast.style.boxShadow = "0 10px 25px -5px rgba(0,0,0,0.5)";
+  toast.style.zIndex = "3000";
+  toast.style.fontFamily = "var(--font-sans, sans-serif)";
+  toast.style.fontSize = "0.85rem";
+  toast.style.display = "flex";
+  toast.style.alignItems = "center";
+  toast.style.gap = "10px";
+  toast.style.opacity = "0";
+  toast.style.transform = "translateY(10px)";
+  toast.style.transition = "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)";
+
+  toast.innerHTML = `<span style="color:#60a5fa; font-size:1.1rem;">⚡</span> <span>${message}</span>`;
+  
+  document.body.appendChild(toast);
+
+  // Force reflow
+  toast.offsetHeight;
+
+  // Show
+  toast.style.opacity = "1";
+  toast.style.transform = "translateY(0)";
+
+  // Hide after 3.5 seconds
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(10px)";
+    setTimeout(() => {
+      toast.remove();
+    }, 300);
+  }, 3500);
+}
+
+window.triggerUPSync = triggerUPSync;
+
+function updateSettingsLogs(message = null) {
+  const consolePre = document.getElementById("console-logs");
+  if (!consolePre) return;
+
+  if (message) {
+    const timestamp = new Date().toLocaleTimeString();
+    consolePre.textContent += `[${timestamp}] ${message}\n`;
+    consolePre.scrollTop = consolePre.scrollHeight;
+  }
+}
+
+async function updatePersistenceBadge() {
+  const indicator = document.getElementById("persist-status-indicator");
+  const textLabel = document.getElementById("persist-status-label");
+  if (!indicator || !textLabel) return;
+  
+  const persisted = await getPersistenceStatus();
+  if (persisted) {
+    indicator.className = "status-indicator online";
+    textLabel.innerText = "IDB Persistente Garantito";
+  } else {
+    indicator.className = "status-indicator";
+    indicator.style.backgroundColor = "var(--accent-orange)";
+    indicator.style.boxShadow = "0 0 8px var(--accent-orange)";
+    textLabel.innerText = "IDB Temporaneo (Best Effort)";
+  }
+}
+
+/**
+ * Print database integrity record count and sample keys to the console log
+ */
+async function printDatabaseDiagnostics() {
+  try {
+    const db = await initDB();
+    const transaction = db.transaction(["observations", "outages"], "readonly");
+    const obsStore = transaction.objectStore("observations");
+    const outStore = transaction.objectStore("outages");
+
+    const obsCountReq = obsStore.count();
+    const outCountReq = outStore.count();
+
+    obsCountReq.onsuccess = () => {
+      outCountReq.onsuccess = () => {
+        updateSettingsLogs(`[DB Diagnostics] Record Osservazioni: ${obsCountReq.result} | Record Outages: ${outCountReq.result}`);
+        
+        const keysReq = obsStore.getAllKeys(null, 5);
+        keysReq.onsuccess = () => {
+          updateSettingsLogs(`[DB Diagnostics] Prime 5 chiavi memorizzate: ${JSON.stringify(keysReq.result)}`);
+        };
+      };
+    };
+  } catch (err) {
+    updateSettingsLogs(`[DB Diagnostics ERROR] ${err.message}`);
+  }
+}
+
+let fleetRedrawTimeout = null;
+function triggerFleetRedrawThrottled() {
+  if (fleetRedrawTimeout) return;
+  fleetRedrawTimeout = setTimeout(() => {
+    fleetRedrawTimeout = null;
+    if (state.view === "fleet") {
+      applyFiltersAndRender();
+    }
+  }, 1000); // Throttled to max once per 1 second during sync
+}
+
+let isAnimating = false;
+function startHeatmapAnimation() {
+  if (isAnimating) return;
+  isAnimating = true;
+  function frame() {
+    if (state.view === "fleet" && state.isSyncRunning) {
+      if (window.redrawHeatmapCached) {
+        window.redrawHeatmapCached();
+      }
+      requestAnimationFrame(frame);
+    } else {
+      isAnimating = false;
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+/**
+ * Drive the sync queue loop inside the main browser thread to avoid service worker timeout/kills.
+ */
+async function runMainSyncQueue() {
+  updateSyncUI();
+  startHeatmapAnimation();
+
+  while (state.syncQueue.length > 0 && !state.shouldCancelSync) {
+    const task = state.syncQueue.shift();
+    const taskKey = `${task.upId}|${task.date}`;
+    state.activeSyncTasks[taskKey] = true;
+    
+    if (state.view === "fleet" && window.redrawHeatmapCached) {
+      window.redrawHeatmapCached();
+    }
+    
+    // Notify clients/UI that task started
+    updateSettingsLogs(`Richiesta inviata: ${task.type.toUpperCase()} (${task.upName || task.upId}, Giorno: ${task.date})`);
+
+    // Post to Service Worker and await resolution
+    const result = await sendTaskToSW(task);
+    
+    state.completedTasks++;
+    delete state.activeSyncTasks[taskKey];
+
+    if (result && result.success) {
+      updateSettingsLogs(`Completato: ${task.type.toUpperCase()} (${task.upName || task.upId}, Giorno: ${task.date}) -> OK. ${result.details || ""} salvato in IDB.`);
+      
+      const yesterdayStr = getYesterdayDateString();
+      if (task.date === yesterdayStr) {
+        const hasMoreTasksForUP = state.syncQueue.some(t => t.upId === task.upId && t.date === yesterdayStr);
+        if (!hasMoreTasksForUP) {
+          let completedUPs = [];
+          try {
+            completedUPs = JSON.parse(localStorage.getItem("yesterday_sync_completed_ups")) || [];
+          } catch(e) {}
+          if (!completedUPs.includes(task.upId)) {
+            completedUPs.push(task.upId);
+            localStorage.setItem("yesterday_sync_completed_ups", JSON.stringify(completedUPs));
+          }
+          
+          const allCompleted = UP_REGISTRY.every(up => completedUPs.includes(up.id));
+          if (allCompleted) {
+            localStorage.setItem("yesterday_sync_status", "completed");
+            updateSettingsLogs("[Yesterday-Sync] Tutti i dati di ieri completati con successo!");
+            showToastNotification("Aggiornamento dati di ieri completato!");
+          }
+        }
+      }
+    } else {
+      const errorMsg = result ? result.error : "Errore sconosciuto";
+      updateSettingsLogs(`ERRORE su ${task.type.toUpperCase()} (${task.upName || task.upId}): ${errorMsg}. Salto al prossimo.`);
+    }
+
+    // Refresh this cell's status in the cache dynamically
+    if (window.refreshCellStatusCached) {
+      await window.refreshCellStatusCached(task.upId, task.date);
+    }
+
+    updateSyncUI();
+
+    // Rate Limiting delay (2000ms) between sequential calls
+    if (state.syncQueue.length > 0 && !state.shouldCancelSync) {
+      updateSettingsLogs("[Pausa di 2000ms per Rate Limiting Gateway Azure...]");
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+
+  state.isSyncRunning = false;
+  updateSyncUI();
+
+  if (state.shouldCancelSync) {
+    updateSettingsLogs("Sincronizzazione storica interrotta dall'utente.");
+  } else {
+    updateSettingsLogs(`Sincronizzazione terminata con successo! ${state.completedTasks} richieste gestite.`);
+    printDatabaseDiagnostics();
+  }
+
+  // Force final immediate redraw if on fleet view to show all latest updates
+  if (state.view === "fleet") {
+    if (fleetRedrawTimeout) {
+      clearTimeout(fleetRedrawTimeout);
+      fleetRedrawTimeout = null;
+    }
+    applyFiltersAndRender();
+  }
+}
+
+/**
+ * Sends a single task to the Service Worker and awaits response via MessageChannel.
+ */
+function sendTaskToSW(task) {
+  return new Promise((resolve) => {
+    const worker = navigator.serviceWorker.controller || 
+                   (state.swRegistration ? (state.swRegistration.active || state.swRegistration.waiting) : null);
+                   
+    if (!worker) {
+      resolve({ success: false, error: "Nessun Service Worker attivo trovato." });
+      return;
+    }
+
+    const channel = new MessageChannel();
+    channel.port1.onmessage = (event) => {
+      resolve(event.data);
+    };
+
+    worker.postMessage(
+      { action: "PROCESS_SINGLE_TASK", task },
+      [channel.port2]
+    );
+  });
+}
+
+/**
+ * Updates progress and status labels inside UI
+ */
+function updateSyncUI() {
+  const badge = document.getElementById("sync-status-indicator");
+  const textLabel = document.getElementById("sync-status-label");
+  const barFill = document.getElementById("sync-progress-fill");
+  const barText = document.getElementById("sync-progress-text");
+  const stopSyncBtn = document.getElementById("stop-sync-btn");
+
+  if (state.isSyncRunning) {
+    badge.className = "status-indicator syncing";
+    const percent = state.totalTasks > 0 ? Math.round((state.completedTasks / state.totalTasks) * 100) : 0;
+    textLabel.innerText = `Sync in corso (${percent}%)`;
+    if (stopSyncBtn) stopSyncBtn.style.display = "inline-flex";
+    
+    if (barFill && barText) {
+      barFill.style.width = `${percent}%`;
+      barText.innerText = `${state.completedTasks} di ${state.totalTasks} richieste completate (${percent}%)`;
+    }
+  } else {
+    badge.className = "status-indicator online";
+    textLabel.innerText = "Sync in Background Attivo";
+    if (stopSyncBtn) stopSyncBtn.style.display = "none";
+    
+    if (barFill && barText) {
+      barFill.style.width = "0%";
+      barText.innerText = "Nessuna sincronizzazione in corso";
+    }
+  }
+}
+
+// ====================================================
+// PPA (POWER PURCHASE AGREEMENT) MANAGEMENT SECTION
+// ====================================================
+
+function loadPPATags() {
+  const stored = localStorage.getItem("ppa_tags");
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch (e) {
+      console.error("[PPA] Failed to parse ppa_tags:", e);
+    }
+  }
+  // Default fallback tags
+  const defaults = [
+    { name: "Enel Trade", color: "#3b82f6" },
+    { name: "Engie Italia", color: "#8b5cf6" },
+    { name: "Edison S.p.A.", color: "#10b981" },
+    { name: "A2A Energia", color: "#fbbf24" }
+  ];
+  localStorage.setItem("ppa_tags", JSON.stringify(defaults));
+  return defaults;
+}
+
+function savePPATags(tags) {
+  localStorage.setItem("ppa_tags", JSON.stringify(tags));
+}
+
+// Global selection state for UPs in the table
+let ppaSelectedUPs = new Set();
+
+function renderPPAPanel() {
+  const tagsListContainer = document.getElementById("ppa-tags-list");
+  const upTableTbody = document.getElementById("ppa-up-table-tbody");
+  const batchSelect = document.getElementById("ppa-batch-tag-select");
+
+  if (!tagsListContainer || !upTableTbody || !batchSelect) return;
+
+  const tags = loadPPATags();
+
+  // 1. Populate Batch dropdown select
+  const currentSelectVal = batchSelect.value;
+  batchSelect.innerHTML = `<option value="">-- Seleziona Partner --</option>` + 
+    tags.map(t => `<option value="${t.name}">${t.name}</option>`).join("");
+  batchSelect.value = currentSelectVal;
+
+  // 2. Render Left Sidebar Tags List
+  tagsListContainer.innerHTML = tags.map(tag => {
+    // Count UPs assigned to this tag
+    const count = UP_REGISTRY.filter(up => up.ppaTag === tag.name).length;
+    return `
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 8px; font-size: 0.75rem;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <div style="width: 10px; height: 10px; border-radius: 50%; background-color: ${tag.color}; box-shadow: 0 0 6px ${tag.color};"></div>
+          <div>
+            <div style="font-weight: 600; color: var(--text-main);">${tag.name}</div>
+            <div style="font-size: 0.65rem; color: var(--text-muted);">${count} unità assegnate</div>
+          </div>
+        </div>
+        <button class="icon-btn ppa-delete-tag-btn" data-tag-name="${tag.name}" style="background: none; border: none; color: #f87171; cursor: pointer; font-size: 0.8rem; padding: 4px; border-radius: 4px;" title="Elimina Partner">
+          🗑️
+        </button>
+      </div>
+    `;
+  }).join("");
+
+  // Bind delete tag buttons
+  tagsListContainer.querySelectorAll(".ppa-delete-tag-btn").forEach(btn => {
+    btn.onclick = () => {
+      const tagName = btn.dataset.tagName;
+      if (confirm(`Sei sicuro di voler eliminare il partner "${tagName}"? Tutte le UP ad esso assegnate verranno dissociate.`)) {
+        // Remove tag definition
+        const updatedTags = tags.filter(t => t.name !== tagName);
+        savePPATags(updatedTags);
+
+        // Dissociate UPs
+        UP_REGISTRY.forEach(up => {
+          if (up.ppaTag === tagName) {
+            delete up.ppaTag;
+            delete up.ppaColor;
+          }
+        });
+        localStorage.setItem("custom_up_registry", JSON.stringify(UP_REGISTRY));
+
+        // Re-render
+        renderPPAPanel();
+      }
+    };
+  });
+
+  // 3. Render UP table body
+  const searchQuery = (document.getElementById("ppa-up-search").value || "").toLowerCase().trim();
+  const showOnlyUnassigned = document.getElementById("ppa-filter-unassigned").checked;
+
+  const filteredUPs = UP_REGISTRY.filter(up => {
+    // Filter by search query
+    if (searchQuery) {
+      const nameMatch = up.name.toLowerCase().includes(searchQuery);
+      const idMatch = up.id.toLowerCase().includes(searchQuery);
+      const tagMatch = up.ppaTag ? up.ppaTag.toLowerCase().includes(searchQuery) : false;
+      const techMatch = up.tech.toLowerCase().includes(searchQuery);
+      const regMatch = up.region.toLowerCase().includes(searchQuery);
+      if (!nameMatch && !idMatch && !tagMatch && !techMatch && !regMatch) return false;
+    }
+    // Filter by unassigned
+    if (showOnlyUnassigned && up.ppaTag) {
+      return false;
+    }
+    return true;
+  });
+
+  // Check if select-all checkbox should be checked
+  const selectAllCb = document.getElementById("ppa-select-all-ups");
+  if (selectAllCb) {
+    const allFilteredSelected = filteredUPs.length > 0 && filteredUPs.every(up => ppaSelectedUPs.has(up.id));
+    selectAllCb.checked = allFilteredSelected;
+  }
+
+  // Draw rows
+  upTableTbody.innerHTML = filteredUPs.map(up => {
+    const isSelected = ppaSelectedUPs.has(up.id);
+    const tagBadge = up.ppaTag ? `
+      <span style="display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 12px; background: ${up.ppaColor}1a; border: 1px solid ${up.ppaColor}40; color: ${up.ppaColor}; font-weight: 600; font-size: 0.65rem;">
+        <span style="width: 6px; height: 6px; border-radius: 50%; background: ${up.ppaColor};"></span>
+        ${up.ppaTag}
+      </span>
+    ` : `<span style="color: var(--text-muted); font-style: italic;">Nessuno</span>`;
+
+    return `
+      <tr style="border-bottom: 1px solid var(--panel-border); background: ${isSelected ? "rgba(59, 130, 246, 0.05)" : "transparent"}; transition: background 0.15s; height: 35px;">
+        <td style="padding: 6px 12px; text-align: center;">
+          <input type="checkbox" class="ppa-up-row-cb" data-up-id="${up.id}" ${isSelected ? "checked" : ""} style="cursor: pointer;">
+        </td>
+        <td style="padding: 6px 12px; font-family: var(--font-mono); font-weight: 600; color: var(--text-main);">${up.id}</td>
+        <td style="padding: 6px 12px; font-weight: 600; color: ${up.ppaColor || "var(--text-main)"};">${up.name}</td>
+        <td style="padding: 6px 12px; color: var(--text-muted);">${up.tech}</td>
+        <td style="padding: 6px 12px; color: var(--text-muted);">${up.region}</td>
+        <td style="padding: 6px 12px;">${tagBadge}</td>
+      </tr>
+    `;
+  }).join("");
+
+  // Bind row checkbox event listeners
+  upTableTbody.querySelectorAll(".ppa-up-row-cb").forEach(cb => {
+    cb.onchange = (e) => {
+      const id = cb.dataset.upId;
+      if (cb.checked) {
+        ppaSelectedUPs.add(id);
+      } else {
+        ppaSelectedUPs.delete(id);
+      }
+      updatePPASelectionCount();
+      // Re-highlight row background without full re-render
+      const tr = cb.closest("tr");
+      if (tr) {
+        tr.style.background = cb.checked ? "rgba(59, 130, 246, 0.05)" : "transparent";
+      }
+    };
+  });
+
+  updatePPASelectionCount();
+  populateDropdowns();
+}
+
+function updatePPASelectionCount() {
+  const selectionStatusLabel = document.getElementById("ppa-selection-status");
+  if (selectionStatusLabel) {
+    selectionStatusLabel.innerText = `Selezionate: ${ppaSelectedUPs.size} / 100 UP`;
+  }
+}
+
+// Bind PPA Setup Handlers once
+function setupPPAHandlers() {
+  // Create Tag Button
+  const createTagBtn = document.getElementById("ppa-create-tag-btn");
+  if (createTagBtn) {
+    createTagBtn.onclick = () => {
+      const nameInput = document.getElementById("ppa-new-tag-name");
+      const colorInput = document.getElementById("ppa-new-tag-color");
+      if (!nameInput || !colorInput) return;
+
+      const name = nameInput.value.trim();
+      const color = colorInput.value;
+
+      if (!name) {
+        alert("Inserisci un nome valido per il partner PPA.");
+        return;
+      }
+
+      const tags = loadPPATags();
+      if (tags.some(t => t.name.toLowerCase() === name.toLowerCase())) {
+        alert("Un partner con questo nome esiste già.");
+        return;
+      }
+
+      tags.push({ name, color });
+      savePPATags(tags);
+
+      // Reset form
+      nameInput.value = "";
+      colorInput.value = "#3b82f6";
+
+      renderPPAPanel();
+    };
+  }
+
+  // Search Input
+  const searchInput = document.getElementById("ppa-up-search");
+  if (searchInput) {
+    searchInput.oninput = () => renderPPAPanel();
+  }
+
+  // Filter Unassigned Checkbox
+  const unassignedCb = document.getElementById("ppa-filter-unassigned");
+  if (unassignedCb) {
+    unassignedCb.onchange = () => renderPPAPanel();
+  }
+
+  // Select All Checkbox
+  const selectAllCb = document.getElementById("ppa-select-all-ups");
+  if (selectAllCb) {
+    selectAllCb.onchange = (e) => {
+      const isChecked = e.target.checked;
+      
+      // Get all filtered UPs currently visible
+      const searchQuery = (document.getElementById("ppa-up-search").value || "").toLowerCase().trim();
+      const showOnlyUnassigned = document.getElementById("ppa-filter-unassigned").checked;
+
+      const visibleUPs = UP_REGISTRY.filter(up => {
+        if (searchQuery) {
+          const nameMatch = up.name.toLowerCase().includes(searchQuery);
+          const idMatch = up.id.toLowerCase().includes(searchQuery);
+          const tagMatch = up.ppaTag ? up.ppaTag.toLowerCase().includes(searchQuery) : false;
+          const techMatch = up.tech.toLowerCase().includes(searchQuery);
+          const regMatch = up.region.toLowerCase().includes(searchQuery);
+          if (!nameMatch && !idMatch && !tagMatch && !techMatch && !regMatch) return false;
+        }
+        if (showOnlyUnassigned && up.ppaTag) return false;
+        return true;
+      });
+
+      visibleUPs.forEach(up => {
+        if (isChecked) {
+          ppaSelectedUPs.add(up.id);
+        } else {
+          ppaSelectedUPs.delete(up.id);
+        }
+      });
+
+      renderPPAPanel();
+    };
+  }
+
+  // Apply Batch Assignment Button
+  const applyBtn = document.getElementById("ppa-apply-assignment-btn");
+  if (applyBtn) {
+    applyBtn.onclick = () => {
+      if (ppaSelectedUPs.size === 0) {
+        alert("Seleziona prima una o più unità (UP) dalla tabella.");
+        return;
+      }
+
+      const batchSelect = document.getElementById("ppa-batch-tag-select");
+      const selectedTagName = batchSelect.value;
+      if (!selectedTagName) {
+        alert("Seleziona un partner PPA dal menu a tendina.");
+        return;
+      }
+
+      const tags = loadPPATags();
+      const matchedTag = tags.find(t => t.name === selectedTagName);
+      if (!matchedTag) return;
+
+      // Update selected UPs
+      UP_REGISTRY.forEach(up => {
+        if (ppaSelectedUPs.has(up.id)) {
+          up.ppaTag = matchedTag.name;
+          up.ppaColor = matchedTag.color;
+        }
+      });
+
+      // Save registry
+      localStorage.setItem("custom_up_registry", JSON.stringify(UP_REGISTRY));
+
+      // Clear selection
+      ppaSelectedUPs.clear();
+
+      // Notify and re-render
+      showToastNotification(`Assegnate ${UP_REGISTRY.filter(up => up.ppaTag === matchedTag.name).length} UP a ${matchedTag.name}`);
+      renderPPAPanel();
+    };
+  }
+
+  // Clear Batch Assignment Button
+  const clearBtn = document.getElementById("ppa-clear-assignment-btn");
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      if (ppaSelectedUPs.size === 0) {
+        alert("Seleziona prima una o più unità (UP) dalla tabella.");
+        return;
+      }
+
+      if (confirm(`Sei sicuro di voler rimuovere l'assegnazione PPA per le ${ppaSelectedUPs.size} unità selezionate?`)) {
+        UP_REGISTRY.forEach(up => {
+          if (ppaSelectedUPs.has(up.id)) {
+            delete up.ppaTag;
+            delete up.ppaColor;
+          }
+        });
+
+        // Save registry
+        localStorage.setItem("custom_up_registry", JSON.stringify(UP_REGISTRY));
+
+        // Clear selection
+        ppaSelectedUPs.clear();
+
+        // Notify and re-render
+        showToastNotification("Rimosse assegnazioni PPA per le UP selezionate");
+        renderPPAPanel();
+      }
+    };
+  }
+}

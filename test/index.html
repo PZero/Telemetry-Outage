@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Integrity Dashboard - Client-Side Test Runner</title>
+  <link rel="stylesheet" href="../src/styles.css">
+  <style>
+    body {
+      overflow-y: auto;
+      background-color: #0b0f19;
+      font-family: 'Outfit', sans-serif;
+      padding: 40px;
+    }
+    .test-container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: rgba(22, 29, 47, 0.8);
+      border: 1px solid rgba(38, 52, 85, 0.6);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    h1 {
+      color: #60a5fa;
+      font-size: 1.6rem;
+      margin-bottom: 20px;
+      border-bottom: 1px solid rgba(38, 52, 85, 0.6);
+      padding-bottom: 10px;
+    }
+    .test-case {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px;
+      border-bottom: 1px solid rgba(38, 52, 85, 0.3);
+      font-size: 0.9rem;
+    }
+    .test-name {
+      font-weight: 500;
+    }
+    .test-status {
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+    .test-status.pass {
+      background: rgba(16, 185, 129, 0.2);
+      color: #10b981;
+    }
+    .test-status.fail {
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+    }
+    .summary {
+      margin-top: 24px;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #f3f4f6;
+    }
+    .btn-run {
+      background: #3b82f6;
+      border: none;
+      color: white;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: all 0.2s;
+    }
+    .btn-run:hover {
+      background: #2563eb;
+      box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="test-container">
+    <h1>Test Suite - Telemetry & Outage Integrity PWA</h1>
+    <p style="color:#9ca3af; margin-bottom:20px;">
+      Questo tool esegue verifiche automatizzate client-side direttamente sulle API IndexedDB, sui classificatori di integrità e sul data registry.
+    </p>
+
+    <div id="test-results">
+      <!-- Test results printed here -->
+    </div>
+
+    <div id="test-summary" class="summary"></div>
+    
+    <button id="run-tests-btn" class="btn-run">Esegui Test Suite</button>
+    <a href="../index.html" style="color:#60a5fa; margin-left: 20px; text-decoration:none; font-weight:600; font-size:0.9rem;">Torna alla Dashboard</a>
+  </div>
+
+  <script type="module">
+    import { initDB, saveObservations, getObservations, saveOutages, getOutages, clearDatabase } from "../src/db.js";
+    import { classifyDayIntegrity } from "../src/ui.js";
+    import { getUPById, UP_REGISTRY } from "../src/registry.js";
+
+    const resultsDiv = document.getElementById("test-results");
+    const summaryDiv = document.getElementById("test-summary");
+    const runBtn = document.getElementById("run-tests-btn");
+
+    runBtn.onclick = runTests;
+
+    async function runTests() {
+      resultsDiv.innerHTML = "";
+      summaryDiv.innerHTML = "Esecuzione in corso...";
+      
+      let passed = 0;
+      let failed = 0;
+
+      const assert = (condition, name) => {
+        const div = document.createElement("div");
+        div.className = "test-case";
+        
+        const nameEl = document.createElement("span");
+        nameEl.className = "test-name";
+        nameEl.innerText = name;
+        
+        const statusEl = document.createElement("span");
+        if (condition) {
+          statusEl.className = "test-status pass";
+          statusEl.innerText = "PASS";
+          passed++;
+        } else {
+          statusEl.className = "test-status fail";
+          statusEl.innerText = "FAIL";
+          failed++;
+        }
+        
+        div.appendChild(nameEl);
+        div.appendChild(statusEl);
+        resultsDiv.appendChild(div);
+      };
+
+      try {
+        // Init Database
+        const db = await initDB();
+        assert(db !== null, "Test 1: Connessione a IndexedDB (UPTelemetryDB)");
+
+        // Clear Database for clean slate tests
+        await clearDatabase();
+        
+        // Test Registry retrieval
+        const up = getUPById("UP_WIND_01");
+        assert(up && up.tech === "Wind" && up.region === "Sicilia", "Test 2: Caricamento Registry UP (UP_WIND_01)");
+        assert(UP_REGISTRY.length === 100, "Test 3: Presenza di 100 UP totali nel registro");
+
+        // Test Observations CRUD
+        const mockValues = Array(144).fill(10);
+        await saveObservations("UP_WIND_01", "2026-05-10", "scada", mockValues);
+        const retrievedObs = await getObservations("UP_WIND_01", "2026-05-10", "scada");
+        assert(retrievedObs !== null && retrievedObs.length === 144 && retrievedObs[10] === 10, "Test 4: Scrittura e lettura Observations (144 record)");
+
+        // Test Outages CRUD
+        const mockOutage = {
+          outage_id: "test_outage_01",
+          up_id: "UP_WIND_01",
+          startDate: "2026-05-10T10:00:00Z",
+          endDate: "2026-05-10T14:00:00Z",
+          reductionPercentage: 60,
+          residualCapacity: 40,
+          notes: "Test Outage"
+        };
+        await saveOutages([mockOutage]);
+        const retrievedOutages = await getOutages("UP_WIND_01");
+        assert(retrievedOutages.length === 1 && retrievedOutages[0].reductionPercentage === 60, "Test 5: Scrittura e lettura Outages in IndexedDB");
+
+        // Test Classification logic: Green Day
+        // Write complete meter and scada values (no nulls)
+        const completeMeter = Array(96).fill(12);
+        const completeScada = Array(144).fill(12);
+        await saveObservations("UP_WIND_01", "2026-05-12", "meter", completeMeter);
+        await saveObservations("UP_WIND_01", "2026-05-12", "scada", completeScada);
+        const greenStatus = await classifyDayIntegrity(getUPById("UP_WIND_01"), "2026-05-12");
+        assert(greenStatus === "green", "Test 6: Classificazione Giorno Completo (Stato Green)");
+
+        // Test Classification logic: Red Day (Unjustified gap)
+        const gapMeter = Array(96).fill(null); // completely empty
+        await saveObservations("UP_WIND_01", "2026-05-13", "meter", gapMeter);
+        await saveObservations("UP_WIND_01", "2026-05-13", "scada", completeScada);
+        const redStatus = await classifyDayIntegrity(getUPById("UP_WIND_01"), "2026-05-13");
+        assert(redStatus === "red", "Test 7: Classificazione Buchi non giustificati (Stato Red)");
+
+        // Test Classification logic: Grey Day (Outage justified missing data)
+        const outageDay = "2026-05-14";
+        const missingMeter = Array(96).fill(null);
+        const missingScada = Array(144).fill(null);
+        await saveObservations("UP_WIND_01", outageDay, "meter", missingMeter);
+        await saveObservations("UP_WIND_01", outageDay, "scada", missingScada);
+        
+        // Outage covering the entire day (00:00 to 23:59)
+        const fullDayOutage = {
+          outage_id: "test_full_outage",
+          up_id: "UP_WIND_01",
+          startDate: `${outageDay}T00:00:00Z`,
+          endDate: `${outageDay}T23:59:59Z`,
+          reductionPercentage: 100,
+          residualCapacity: 0,
+          notes: "Manutenzione Giornaliera Totale"
+        };
+        await saveOutages([fullDayOutage]);
+        const greyStatus = await classifyDayIntegrity(getUPById("UP_WIND_01"), outageDay);
+        assert(greyStatus === "grey", "Test 8: Classificazione Buchi coperti da Outage (Stato Grey)");
+
+      } catch (err) {
+        console.error("Test execution failed with error:", err);
+        assert(false, `Test crash error: ${err.message}`);
+      }
+
+      summaryDiv.innerHTML = `Test Completati: ${passed + failed} | <span style="color:#10b981">Superati: ${passed}</span> | <span style="color:#ef4444">Falliti: ${failed}</span>`;
+    }
+
+    // Auto-run on start
+    runTests();
+  </script>
+</body>
+</html>
