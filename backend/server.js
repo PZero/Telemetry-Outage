@@ -289,6 +289,15 @@ app.post('/api/db/retention', requireAdmin, async (req, res) => {
   }
 });
 
+app.get('/api/db/stats', async (req, res) => {
+  try {
+    const stats = await dbService.getStats();
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /**
  * Registry (UP Fleet) Endpoints
  */

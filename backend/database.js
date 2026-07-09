@@ -357,5 +357,14 @@ export const dbService = {
     }
     await dbRun('UPDATE users SET role = ? WHERE email = ?', [role, email]);
     return true;
+  },
+
+  async getStats() {
+    const obsCount = await dbGet('SELECT COUNT(*) as count FROM observations');
+    const outCount = await dbGet('SELECT COUNT(*) as count FROM outages');
+    return {
+      observations: obsCount.count,
+      outages: outCount.count
+    };
   }
 };

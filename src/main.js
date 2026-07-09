@@ -1827,24 +1827,13 @@ async function updatePersistenceBadge() {
  */
 async function printDatabaseDiagnostics() {
   try {
-    const db = await initDB();
-    const transaction = db.transaction(["observations", "outages"], "readonly");
-    const obsStore = transaction.objectStore("observations");
-    const outStore = transaction.objectStore("outages");
-
-    const obsCountReq = obsStore.count();
-    const outCountReq = outStore.count();
-
-    obsCountReq.onsuccess = () => {
-      outCountReq.onsuccess = () => {
-        updateSettingsLogs(`[DB Diagnostics] Record Osservazioni: ${obsCountReq.result} | Record Outages: ${outCountReq.result}`);
-        
-        const keysReq = obsStore.getAllKeys(null, 5);
-        keysReq.onsuccess = () => {
-          updateSettingsLogs(`[DB Diagnostics] Prime 5 chiavi memorizzate: ${JSON.stringify(keysReq.result)}`);
-        };
-      };
-    };
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const response = await fetch(`${apiUrl}/api/db/stats`, {
+      headers: getAuthHeaders()
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const stats = await response.json();
+    updateSettingsLogs(`[DB Diagnostics] Record Osservazioni: ${stats.observations} | Record Outages: ${stats.outages}`);
   } catch (err) {
     updateSettingsLogs(`[DB Diagnostics ERROR] ${err.message}`);
   }
@@ -1972,23 +1961,29 @@ async function runMainSyncQueue() {
 function sendTaskToSW(task) {
   task.apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
   return new Promise((resolve) => {
-    const worker = navigator.serviceWorker.controller || 
-                   (state.swRegistration ? (state.swRegistration.active || state.swRegistration.waiting) : null);
-                   
-    if (!worker) {
-      resolve({ success: false, error: "Nessun Service Worker attivo trovato." });
+    if (!("serviceWorker" in navigator)) {
+      resolve({ success: false, error: "I Service Worker non sono supportati in questo browser." });
       return;
     }
+    navigator.serviceWorker.ready.then((reg) => {
+      const worker = navigator.serviceWorker.controller || reg.active || reg.waiting || reg.installing;
+      if (!worker) {
+        resolve({ success: false, error: "Nessun Service Worker attivo trovato." });
+        return;
+      }
 
-    const channel = new MessageChannel();
-    channel.port1.onmessage = (event) => {
-      resolve(event.data);
-    };
+      const channel = new MessageChannel();
+      channel.port1.onmessage = (event) => {
+        resolve(event.data);
+      };
 
-    worker.postMessage(
-      { action: "PROCESS_SINGLE_TASK", task },
-      [channel.port2]
-    );
+      worker.postMessage(
+        { action: "PROCESS_SINGLE_TASK", task },
+        [channel.port2]
+      );
+    }).catch(err => {
+      resolve({ success: false, error: `Errore Service Worker: ${err.message}` });
+    });
   });
 }
 
