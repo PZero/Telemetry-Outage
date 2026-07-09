@@ -7,7 +7,7 @@ window.onerror = function(message, source, lineno, colno, error) {
 
 import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry } from "./registry.js";
 import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations, saveObservations, saveOutages } from "./db.js";
-import { isSimulatedMode, setSimulatedMode, getAuthHeaders, fetchObservations, fetchOutages } from "./api.js";
+import { isSimulatedMode, setSimulatedMode, getAuthHeaders, fetchObservations, fetchOutages, fetchObservationsRange } from "./api.js";
 import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats } from "./ui.js";
 
 // Global Application State
@@ -1445,6 +1445,17 @@ async function enforceRetentionPolicy() {
 /**
  * Triggers background mass historical sync.
  */
+function chunkArray(array, size) {
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/**
+ * Triggers background mass historical sync.
+ */
 async function triggerMassHistoricalSync(isSelective = false) {
   if (state.isSyncRunning) {
     alert("Una sincronizzazione storica è già in corso. Attendi il completamento o arrestala.");
@@ -1475,8 +1486,6 @@ async function triggerMassHistoricalSync(isSelective = false) {
   const token = localStorage.getItem("azure_api_token") || "";
   const simMode = isSimulatedMode();
 
-
-
   updateSettingsLogs("Preparazione del piano di sincronizzazione...");
   if (isSelective) {
     updateSettingsLogs("[Recupero Gap] Verifica dei dati già presenti a database in corso...");
@@ -1490,52 +1499,71 @@ async function triggerMassHistoricalSync(isSelective = false) {
     : UP_REGISTRY.filter(up => up.id === selectedUpId);
 
   for (const up of targetUPs) {
+    const meterDates = [];
+    const scadaDates = [];
+    const outagesDates = [];
+    const noScada = isScadaDisabled(up.id);
+
     for (const dateStr of syncDates) {
       if (isSelective) {
-        const noScada = isScadaDisabled(up.id);
-        
         if (noScada) {
           const meterObs = await getObservations(up.id, dateStr, "meter");
           const meterComplete = meterObs && !meterObs.includes(null);
-          if (meterComplete) {
-            // Meter is complete and SCADA is intentionally disabled. Nothing to sync!
-            continue;
+          if (!meterComplete) {
+            meterDates.push(dateStr);
           }
         } else {
-          // Standard check: classify day integrity first
           const integrityResult = await classifyDayIntegrity(up, dateStr);
           const integrity = integrityResult.status;
-          if (integrity === "green" || integrity === "grey") {
-            // No unjustified gaps! Skip completely.
-            continue;
-          }
-        }
+          if (integrity !== "green" && integrity !== "grey") {
+            const meterObs = await getObservations(up.id, dateStr, "meter");
+            const meterHasNulls = !meterObs || meterObs.includes(null);
+            if (meterHasNulls) {
+              meterDates.push(dateStr);
+            }
 
-        // It has gaps (red or orange), check which specific streams are missing or contain nulls
-        const meterObs = await getObservations(up.id, dateStr, "meter");
-        const meterHasNulls = !meterObs || meterObs.includes(null);
-
-        if (meterHasNulls) {
-          tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
-        }
-        
-        if (!noScada) {
-          const scadaObs = await getObservations(up.id, dateStr, "scada");
-          const scadaHasNulls = !scadaObs || scadaObs.includes(null);
-          if (scadaHasNulls) {
-            tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
+            const scadaObs = await getObservations(up.id, dateStr, "scada");
+            const scadaHasNulls = !scadaObs || scadaObs.includes(null);
+            if (scadaHasNulls) {
+              scadaDates.push(dateStr);
+            }
           }
         }
         
-        // Always query outages for days with gaps to ensure list is in sync
-        tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+        // For selective, check outages for days with gaps
+        const integrityResult = await classifyDayIntegrity(up, dateStr);
+        const integrity = integrityResult.status;
+        if (integrity !== "green" && integrity !== "grey") {
+          outagesDates.push(dateStr);
+        }
       } else {
         // Mass sync: always push everything
-        tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
-        tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: isScadaDisabled(up.id) });
-        tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+        meterDates.push(dateStr);
+        if (!noScada) {
+          scadaDates.push(dateStr);
+        }
+        outagesDates.push(dateStr);
       }
     }
+
+    // Chunk dates by 5 and push tasks
+    chunkArray(meterDates, 5).forEach(chunk => {
+      tasks.push({ upId: up.id, dates: chunk, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+    });
+
+    chunkArray(scadaDates, 5).forEach(chunk => {
+      tasks.push({ upId: up.id, dates: chunk, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
+    });
+
+    if (!isSelective && noScada) {
+      chunkArray(syncDates, 5).forEach(chunk => {
+        tasks.push({ upId: up.id, dates: chunk, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: true });
+      });
+    }
+
+    chunkArray(outagesDates, 5).forEach(chunk => {
+      tasks.push({ upId: up.id, dates: chunk, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+    });
   }
 
   if (tasks.length === 0) {
@@ -1550,7 +1578,7 @@ async function triggerMassHistoricalSync(isSelective = false) {
   state.isSyncRunning = true;
   state.shouldCancelSync = false;
 
-  updateSettingsLogs(`Generati ${tasks.length} task di sincronizzazione storica (${isSelective ? "Selettiva/Gap" : "Massiva/Riscrivi"}). Avvio elaborazione in corso...`);
+  updateSettingsLogs(`Generati ${tasks.length} blocchi di sincronizzazione storica (5gg/task, ${isSelective ? "Selettiva/Gap" : "Massiva/Riscrivi"}). Avvio elaborazione...`);
   runMainSyncQueue();
 }
 
@@ -1573,52 +1601,84 @@ async function triggerUPSync(upId, isSelective = true) {
 
   updateSettingsLogs(`Preparazione piano recupero dati per UP ${up.name}...`);
 
+  const meterDates = [];
+  const scadaDates = [];
+  const outagesDates = [];
+
   for (const dateStr of range) {
     if (isSelective) {
       if (noScada) {
         const meterObs = await getObservations(up.id, dateStr, "meter");
         const meterComplete = meterObs && !meterObs.includes(null);
-        if (meterComplete) {
-          continue;
+        if (!meterComplete) {
+          meterDates.push(dateStr);
         }
       } else {
         const integrityResult = await classifyDayIntegrity(up, dateStr);
         const integrity = integrityResult.status;
-        if (integrity === "green" || integrity === "grey") {
-          continue;
+        if (integrity !== "green" && integrity !== "grey") {
+          const meterObs = await getObservations(up.id, dateStr, "meter");
+          const meterHasNulls = !meterObs || meterObs.includes(null);
+          if (meterHasNulls) {
+            meterDates.push(dateStr);
+          }
+
+          const scadaObs = await getObservations(up.id, dateStr, "scada");
+          const scadaHasNulls = !scadaObs || scadaObs.includes(null);
+          if (scadaHasNulls) {
+            scadaDates.push(dateStr);
+          }
         }
       }
 
-      // Check which streams are missing or contain nulls
-      const meterObs = await getObservations(up.id, dateStr, "meter");
-      const meterHasNulls = !meterObs || meterObs.includes(null);
-
-      if (meterHasNulls) {
-        tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+      const integrityResult = await classifyDayIntegrity(up, dateStr);
+      const integrity = integrityResult.status;
+      if (integrity !== "green" && integrity !== "grey") {
+        outagesDates.push(dateStr);
       }
-      
-      if (!noScada) {
-        const scadaObs = await getObservations(up.id, dateStr, "scada");
-        const scadaHasNulls = !scadaObs || scadaObs.includes(null);
-        if (scadaHasNulls) {
-          tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
-        }
-      }
-      
-      tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
     } else {
-      // Rewrite sync: push everything
-      tasks.push({ upId: up.id, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
-      tasks.push({ upId: up.id, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada });
-      tasks.push({ upId: up.id, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+      meterDates.push(dateStr);
+      if (!noScada) {
+        scadaDates.push(dateStr);
+      }
+      outagesDates.push(dateStr);
     }
   }
 
   // De-duplicate tasks against the currently running queue
-  const existingKeys = new Set(state.syncQueue.map(t => `${t.upId}_${t.date}_${t.type}`));
-  const uniqueTasks = tasks.filter(t => !existingKeys.has(`${t.upId}_${t.date}_${t.type}`));
+  const existingKeys = new Set();
+  state.syncQueue.forEach(t => {
+    if (t.dates) {
+      t.dates.forEach(d => existingKeys.add(`${t.upId}_${d}_${t.type}`));
+    }
+  });
 
-  if (uniqueTasks.length === 0) {
+  const filteredMeterDates = meterDates.filter(d => !existingKeys.has(`${up.id}_${d}_meter`));
+  const filteredScadaDates = scadaDates.filter(d => !existingKeys.has(`${up.id}_${d}_scada`));
+  const filteredOutagesDates = outagesDates.filter(d => !existingKeys.has(`${up.id}_${d}_outages`));
+
+  chunkArray(filteredMeterDates, 5).forEach(chunk => {
+    tasks.push({ upId: up.id, dates: chunk, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
+  });
+
+  chunkArray(filteredScadaDates, 5).forEach(chunk => {
+    tasks.push({ upId: up.id, dates: chunk, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
+  });
+
+  if (!isSelective && noScada) {
+    chunkArray(range, 5).forEach(chunk => {
+      const filteredChunk = chunk.filter(d => !existingKeys.has(`${up.id}_${d}_scada`));
+      if (filteredChunk.length > 0) {
+        tasks.push({ upId: up.id, dates: filteredChunk, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: true });
+      }
+    });
+  }
+
+  chunkArray(filteredOutagesDates, 5).forEach(chunk => {
+    tasks.push({ upId: up.id, dates: chunk, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
+  });
+
+  if (tasks.length === 0) {
     if (state.isSyncRunning) {
       updateSettingsLogs(`Recupero per UP ${up.name}: tutti i compiti sono già in coda o completati.`);
       showToastNotification(`UP ${up.name} è già in coda o completata`);
@@ -1629,19 +1689,17 @@ async function triggerUPSync(upId, isSelective = true) {
   }
 
   if (state.isSyncRunning) {
-    // Append to existing queue
-    state.syncQueue.push(...uniqueTasks);
-    state.totalTasks += uniqueTasks.length;
-    updateSettingsLogs(`Accodati ${uniqueTasks.length} nuovi compiti di sincronizzazione per UP ${up.name} alla coda attiva.`);
-    showToastNotification(`Accodati ${uniqueTasks.length} task per ${up.name}`);
+    state.syncQueue.push(...tasks);
+    state.totalTasks += tasks.length;
+    updateSettingsLogs(`Accodati ${tasks.length} nuovi blocchi di sincronizzazione per UP ${up.name} alla coda attiva.`);
+    showToastNotification(`Accodati ${tasks.length} blocchi per ${up.name}`);
   } else {
-    // Start new sync queue
-    state.syncQueue = uniqueTasks;
-    state.totalTasks = uniqueTasks.length;
+    state.syncQueue = tasks;
+    state.totalTasks = tasks.length;
     state.completedTasks = 0;
     state.isSyncRunning = true;
     state.shouldCancelSync = false;
-    updateSettingsLogs(`Generati ${uniqueTasks.length} task per UP ${up.name}. Avvio elaborazione...`);
+    updateSettingsLogs(`Generati ${tasks.length} blocchi per UP ${up.name}. Avvio elaborazione...`);
     showToastNotification(`Avviato recupero dati per ${up.name}`);
     runMainSyncQueue();
   }
@@ -1876,49 +1934,81 @@ async function runMainSyncQueue() {
 
   while (state.syncQueue.length > 0 && !state.shouldCancelSync) {
     const task = state.syncQueue.shift();
-    const taskKey = `${task.upId}|${task.date}`;
-    state.activeSyncTasks[taskKey] = true;
+    
+    // Mark all dates in this chunk as actively syncing for UI feedback!
+    if (task.dates && Array.isArray(task.dates)) {
+      task.dates.forEach(d => {
+        state.activeSyncTasks[`${task.upId}|${d}`] = true;
+      });
+    } else if (task.date) {
+      state.activeSyncTasks[`${task.upId}|${task.date}`] = true;
+    }
     
     if (state.view === "fleet" && window.redrawHeatmapCached) {
       window.redrawHeatmapCached();
     }
     
+    const dates = task.dates || [task.date];
+    const sortedDates = [...dates].sort();
+    const startDate = sortedDates[0];
+    const endDate = sortedDates[sortedDates.length - 1];
+    const datesInfo = dates.length === 1 ? dates[0] : `${startDate} al ${endDate} (${dates.length} gg)`;
+
     // Notify clients/UI that task started
-    updateSettingsLogs(`Richiesta inviata: ${task.type.toUpperCase()} (${task.upName || task.upId}, Giorno: ${task.date})`);
+    updateSettingsLogs(`Richiesta inviata: ${task.type.toUpperCase()} (${task.upName || task.upId}, Periodo: ${datesInfo})`);
 
     // Execute task directly using central backend proxy API
     let result = { success: false };
     try {
       if (task.type === "meter" || task.type === "scada") {
-        let values;
         if (task.type === "scada" && task.noScada) {
           const steps = (task.upTech === "Wind") ? 144 : 96;
-          values = Array(steps).fill(null);
-          await saveObservations(task.upId, task.date, task.type, values);
-          result = { success: true, details: `Marcata come NO-SCADA (${steps} punti nulli)` };
+          const values = Array(steps).fill(null);
+          for (const d of dates) {
+            await saveObservations(task.upId, d, task.type, values);
+          }
+          result = { success: true, details: `Marcata come NO-SCADA (${dates.length} giorni compilati con nulli)` };
         } else {
-          values = await fetchObservations(task.upId, task.date, task.type);
-          await saveObservations(task.upId, task.date, task.type, values);
-          result = { success: true, details: `Telemetria salvata (${values ? values.length : 0} punti)` };
+          // Fetch observations for the entire range in a single request!
+          const observationsMap = await fetchObservationsRange(task.upId, startDate, endDate, task.type);
+          
+          // Save each day's parsed observations into SQLite
+          for (const d of dates) {
+            const values = observationsMap[d] || Array((task.upTech === "Wind" && task.type === "scada") ? 144 : 96).fill(null);
+            await saveObservations(task.upId, d, task.type, values);
+          }
+          
+          result = { success: true, details: `Telemetrie salvate per ${dates.length} giorni` };
         }
       } else if (task.type === "outages") {
-        const outages = await fetchOutages(task.upId, task.date, task.date);
+        const outages = await fetchOutages(task.upId, startDate, endDate);
         await saveOutages(outages);
-        result = { success: true, details: `Salvati ${outages ? outages.length : 0} outages` };
+        result = { success: true, details: `Salvati ${outages ? outages.length : 0} outages per il periodo` };
       }
     } catch (err) {
       result = { success: false, error: err.message || String(err) };
     }
     
     state.completedTasks++;
-    delete state.activeSyncTasks[taskKey];
+    
+    // Clean up active sync tasks
+    if (task.dates && Array.isArray(task.dates)) {
+      task.dates.forEach(d => {
+        delete state.activeSyncTasks[`${task.upId}|${d}`];
+      });
+    } else if (task.date) {
+      delete state.activeSyncTasks[`${task.upId}|${task.date}`];
+    }
 
     if (result && result.success) {
-      updateSettingsLogs(`Completato: ${task.type.toUpperCase()} (${task.upName || task.upId}, Giorno: ${task.date}) -> OK. ${result.details || ""} salvato in IDB.`);
+      updateSettingsLogs(`Completato: ${task.type.toUpperCase()} (${task.upName || task.upId}, Periodo: ${datesInfo}) -> OK. ${result.details || ""}.`);
       
       const yesterdayStr = getYesterdayDateString();
-      if (task.date === yesterdayStr) {
-        const hasMoreTasksForUP = state.syncQueue.some(t => t.upId === task.upId && t.date === yesterdayStr);
+      if (dates.includes(yesterdayStr)) {
+        const hasMoreTasksForUP = state.syncQueue.some(t => {
+          const tDates = t.dates || [t.date];
+          return t.upId === task.upId && tDates.includes(yesterdayStr);
+        });
         if (!hasMoreTasksForUP) {
           let completedUPs = [];
           try {
@@ -1939,12 +2029,14 @@ async function runMainSyncQueue() {
       }
     } else {
       const errorMsg = result ? result.error : "Errore sconosciuto";
-      updateSettingsLogs(`ERRORE su ${task.type.toUpperCase()} (${task.upName || task.upId}): ${errorMsg}. Salto al prossimo.`);
+      updateSettingsLogs(`ERRORE su ${task.type.toUpperCase()} (${task.upName || task.upId}, Periodo: ${datesInfo}): ${errorMsg}. Salto al prossimo.`);
     }
 
     // Refresh this cell's status in the cache dynamically
     if (window.refreshCellStatusCached) {
-      await window.refreshCellStatusCached(task.upId, task.date);
+      for (const d of dates) {
+        await window.refreshCellStatusCached(task.upId, d);
+      }
     }
 
     updateSyncUI();
@@ -1962,7 +2054,7 @@ async function runMainSyncQueue() {
   if (state.shouldCancelSync) {
     updateSettingsLogs("Sincronizzazione storica interrotta dall'utente.");
   } else {
-    updateSettingsLogs(`Sincronizzazione terminata con successo! ${state.completedTasks} richieste gestite.`);
+    updateSettingsLogs(`Sincronizzazione terminata con successo! ${state.completedTasks} blocchi gestiti.`);
     printDatabaseDiagnostics();
   }
 

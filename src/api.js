@@ -94,6 +94,65 @@ export async function fetchObservations(upId, date, type) {
 }
 
 /**
+ * Fetches observations for a range of dates, returning an object mapping date strings to parsed arrays.
+ */
+export async function fetchObservationsRange(upId, startDate, endDate, type) {
+  const up = getUPById(upId);
+  if (!up) throw new Error(`UP ${upId} not found in registry.`);
+
+  if (isSimulatedMode()) {
+    const results = {};
+    const start = new Date(`${startDate}T00:00:00Z`);
+    const end = new Date(`${endDate}T00:00:00Z`);
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      results[dateStr] = generateMockObservations(upId, dateStr, type);
+    }
+    return results;
+  }
+
+  const url = `${BASE_URL}/api/observation`;
+  const startObj = new Date(`${startDate}T00:00:00Z`);
+  const endObj = new Date(`${endDate}T00:00:00Z`);
+  
+  const prevDateObj = new Date(startObj.getTime() - 24 * 60 * 60 * 1000);
+  const prevDateStr = `${prevDateObj.getUTCFullYear()}-${String(prevDateObj.getUTCMonth() + 1).padStart(2, "0")}-${String(prevDateObj.getUTCDate()).padStart(2, "0")}`;
+
+  const nextDateObj = new Date(endObj.getTime() + 24 * 60 * 60 * 1000);
+  const nextDateStr = `${nextDateObj.getUTCFullYear()}-${String(nextDateObj.getUTCMonth() + 1).padStart(2, "0")}-${String(nextDateObj.getUTCDate()).padStart(2, "0")}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      from_UTC: `${prevDateStr}T21:00:00`,
+      to_UTC: `${nextDateStr}T03:00:00`,
+      update: false,
+      upname: [up.name],
+      aggregatedData: false,
+      type: type,
+      upId: upId,
+      startDate: startDate,
+      endDate: endDate
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Azure API error: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  
+  const results = {};
+  const startD = new Date(startObj);
+  for (let d = new Date(startD); d <= endObj; d.setDate(d.getDate() + 1)) {
+    const dateStr = d.toISOString().split('T')[0];
+    results[dateStr] = parseObservationResponse(data, up, dateStr, type);
+  }
+  return results;
+}
+
+/**
  * Fetches outages for a given UP and date range.
  * @param {string} upId 
  * @param {string} startDate YYYY-MM-DD
