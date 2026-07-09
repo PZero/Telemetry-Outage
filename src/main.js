@@ -5,7 +5,7 @@ window.onerror = function(message, source, lineno, colno, error) {
   alert(`[App Error Boundary]\nUn errore imprevisto ha bloccato l'applicazione:\n\n${message}\n\nFile: ${source.substring(source.lastIndexOf('/') + 1)} (riga ${lineno})`);
 };
 
-import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled } from "./registry.js";
+import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry } from "./registry.js";
 import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations } from "./db.js";
 import { isSimulatedMode, setSimulatedMode } from "./api.js";
 import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats } from "./ui.js";
@@ -35,9 +35,32 @@ const state = {
   completedTasks: 0,
   isSyncRunning: false,
   shouldCancelSync: false,
-  swRegistration: null
+  swRegistration: null,
+  ppaTags: []
 };
 window.appState = state;
+
+/**
+ * Fetch PPA Tags from central backend database.
+ */
+async function fetchPPATagsFromServer() {
+  try {
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const response = await fetch(`${apiUrl}/api/ppa/tags`);
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    const data = await response.json();
+    state.ppaTags = data;
+    console.log(`[PPA] Loaded ${data.length} tags from backend database.`);
+  } catch (err) {
+    console.error("[PPA] Failed to load tags from backend, using local fallback:", err);
+    state.ppaTags = [
+      { name: "Enel", color: "#10b981" },
+      { name: "Engie", color: "#3b82f6" },
+      { name: "Edison", color: "#8b5cf6" },
+      { name: "A2A", color: "#f59e0b" }
+    ];
+  }
+}
 
 // Date pool constants (90 days prior to 2026-07-03)
 // Dynamic date pool ending 7 days in the future from today's local date
@@ -61,12 +84,15 @@ for (let d = new Date(POOL_START_DATE); d <= POOL_END_DATE; d.setDate(d.getDate(
 window.addEventListener("DOMContentLoaded", async () => {
   console.log("[App] Booting Telemetry & Outage Integrity PWA...");
   
-  // 1. Initialize IndexedDB
+  // 1. Initialize central Registry, PPA Tags, and Database Proxy
   try {
+    await loadUPRegistry();
+    await fetchPPATagsFromServer();
     await initDB();
-    console.log("[App] IndexedDB initialized.");
+    console.log("[App] Backend central database and DB proxy initialized.");
   } catch (err) {
-    alert("Impossibile caricare IndexedDB localmente: l'applicazione potrebbe non salvare i dati.");
+    console.error(err);
+    alert("Impossibile inizializzare il database centralizzato. L'applicazione potrebbe mostrare dati incompleti.");
   }
 
   // 2. Register Service Worker
@@ -1285,13 +1311,22 @@ function setupSettingsHandlers() {
         return;
       }
 
-      // Save to localStorage
+      // Save raw text locally for form preservation
       localStorage.setItem("custom_up_raw_text", rawText);
-      localStorage.setItem("custom_up_registry", JSON.stringify(customList));
 
-      // Reload global registry
-      import("./registry.js").then(module => {
-        module.loadUPRegistry();
+      // Save structured fleet to backend database
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      fetch(`${apiUrl}/api/registry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(customList)
+      })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+        return import("./registry.js");
+      })
+      .then(async (module) => {
+        await module.loadUPRegistry();
         
         // Re-populate region and search dropdowns in Sidebar
         populateDropdowns();
@@ -1299,6 +1334,10 @@ function setupSettingsHandlers() {
         updateSettingsLogs(`Flotta UP personalizzata importata con successo. Caricate ${customList.length} UP.`);
         alert(`Flotta importata con successo! Caricate ${customList.length} UP.`);
         applyFiltersAndRender();
+      })
+      .catch(err => {
+        console.error(err);
+        alert(`Errore salvataggio flotta sul database: ${err.message}`);
       });
     };
   }
@@ -1307,15 +1346,24 @@ function setupSettingsHandlers() {
     resetFleetBtn.onclick = () => {
       if (confirm("Sei sicuro di voler ripristinare la flotta di default (100 UP)?")) {
         localStorage.removeItem("custom_up_raw_text");
-        localStorage.removeItem("custom_up_registry");
         if (fleetTextarea) fleetTextarea.value = "";
 
-        import("./registry.js").then(module => {
-          module.loadUPRegistry();
+        const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+        fetch(`${apiUrl}/api/registry/reset`, { method: "POST" })
+        .then(response => {
+          if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+          return import("./registry.js");
+        })
+        .then(async (module) => {
+          await module.loadUPRegistry();
           populateDropdowns();
           updateSettingsLogs("Flotta UP ripristinata ai valori predefiniti (100 UP).");
           alert("Flotta ripristinata ai valori predefiniti!");
           applyFiltersAndRender();
+        })
+        .catch(err => {
+          console.error(err);
+          alert(`Errore reset flotta sul database: ${err.message}`);
         });
       }
     };
@@ -1918,27 +1966,37 @@ function updateSyncUI() {
 // ====================================================
 
 function loadPPATags() {
-  const stored = localStorage.getItem("ppa_tags");
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch (e) {
-      console.error("[PPA] Failed to parse ppa_tags:", e);
-    }
-  }
-  // Default fallback tags
-  const defaults = [
-    { name: "Enel Trade", color: "#3b82f6" },
-    { name: "Engie Italia", color: "#8b5cf6" },
-    { name: "Edison S.p.A.", color: "#10b981" },
-    { name: "A2A Energia", color: "#fbbf24" }
-  ];
-  localStorage.setItem("ppa_tags", JSON.stringify(defaults));
-  return defaults;
+  return state.ppaTags || [];
 }
 
-function savePPATags(tags) {
-  localStorage.setItem("ppa_tags", JSON.stringify(tags));
+async function savePPATagToServer(name, color) {
+  try {
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const response = await fetch(`${apiUrl}/api/ppa/tags`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, color })
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    await fetchPPATagsFromServer();
+  } catch (err) {
+    console.error("[PPA] Failed to save tag:", err);
+  }
+}
+
+async function deletePPATagFromServer(name) {
+  try {
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const response = await fetch(`${apiUrl}/api/ppa/tags`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name })
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    await fetchPPATagsFromServer();
+  } catch (err) {
+    console.error("[PPA] Failed to delete tag:", err);
+  }
 }
 
 // Global selection state for UPs in the table
@@ -1984,21 +2042,24 @@ function renderPPAPanel() {
     btn.onclick = () => {
       const tagName = btn.dataset.tagName;
       if (confirm(`Sei sicuro di voler eliminare il partner "${tagName}"? Tutte le UP ad esso assegnate verranno dissociate.`)) {
-        // Remove tag definition
-        const updatedTags = tags.filter(t => t.name !== tagName);
-        savePPATags(updatedTags);
-
-        // Dissociate UPs
-        UP_REGISTRY.forEach(up => {
-          if (up.ppaTag === tagName) {
-            delete up.ppaTag;
-            delete up.ppaColor;
-          }
+        deletePPATagFromServer(tagName).then(() => {
+          // Dissociate UPs
+          UP_REGISTRY.forEach(up => {
+            if (up.ppaTag === tagName) {
+              delete up.ppaTag;
+              delete up.ppaColor;
+            }
+          });
+          const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+          return fetch(`${apiUrl}/api/registry`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(UP_REGISTRY)
+          });
+        }).then(() => {
+          renderPPAPanel();
+          applyFiltersAndRender();
         });
-        localStorage.setItem("custom_up_registry", JSON.stringify(UP_REGISTRY));
-
-        // Re-render
-        renderPPAPanel();
       }
     };
   });
@@ -2108,14 +2169,12 @@ function setupPPAHandlers() {
         return;
       }
 
-      tags.push({ name, color });
-      savePPATags(tags);
-
-      // Reset form
-      nameInput.value = "";
-      colorInput.value = "#3b82f6";
-
-      renderPPAPanel();
+      savePPATagToServer(name, color).then(() => {
+        // Reset form
+        nameInput.value = "";
+        colorInput.value = "#3b82f6";
+        renderPPAPanel();
+      });
     };
   }
 
@@ -2194,15 +2253,23 @@ function setupPPAHandlers() {
         }
       });
 
-      // Save registry
-      localStorage.setItem("custom_up_registry", JSON.stringify(UP_REGISTRY));
-
-      // Clear selection
-      ppaSelectedUPs.clear();
-
-      // Notify and re-render
-      showToastNotification(`Assegnate ${UP_REGISTRY.filter(up => up.ppaTag === matchedTag.name).length} UP a ${matchedTag.name}`);
-      renderPPAPanel();
+      // Save registry to backend database
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      fetch(`${apiUrl}/api/registry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(UP_REGISTRY)
+      })
+      .then(response => {
+        if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+        ppaSelectedUPs.clear();
+        showToastNotification(`Assegnate UP a ${matchedTag.name}`);
+        renderPPAPanel();
+      })
+      .catch(err => {
+        console.error(err);
+        alert(`Errore nel salvataggio dell'assegnazione: ${err.message}`);
+      });
     };
   }
 
@@ -2223,15 +2290,23 @@ function setupPPAHandlers() {
           }
         });
 
-        // Save registry
-        localStorage.setItem("custom_up_registry", JSON.stringify(UP_REGISTRY));
-
-        // Clear selection
-        ppaSelectedUPs.clear();
-
-        // Notify and re-render
-        showToastNotification("Rimosse assegnazioni PPA per le UP selezionate");
-        renderPPAPanel();
+        // Save registry to backend database
+        const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+        fetch(`${apiUrl}/api/registry`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(UP_REGISTRY)
+        })
+        .then(response => {
+          if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+          ppaSelectedUPs.clear();
+          showToastNotification("Rimosse assegnazioni PPA per le UP selezionate");
+          renderPPAPanel();
+        })
+        .catch(err => {
+          console.error(err);
+          alert(`Errore nella cancellazione dell'assegnazione: ${err.message}`);
+        });
       }
     };
   }

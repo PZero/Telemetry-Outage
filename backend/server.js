@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { dbService } from './database.js';
 
 // Load environment variables
 dotenv.config();
@@ -62,7 +63,6 @@ async function getAzureToken() {
   const data = await response.json();
   if (data && data.access_token) {
     cachedToken = data.access_token;
-    // Calculate absolute expiration timestamp
     const expiresIn = data.expires_in || 3599;
     tokenExpiresAt = Date.now() + expiresIn * 1000;
     console.log(`[Auth] Token successfully acquired. Expires in ${expiresIn}s.`);
@@ -141,10 +141,194 @@ app.post('/api/outage', async (req, res) => {
   }
 });
 
+// ==========================================
+// DATABASE ENDPOINTS (CENTRALIZED STORE)
+// ==========================================
+
+/**
+ * Observations Storage Endpoints
+ */
+app.get('/api/db/observations', async (req, res) => {
+  try {
+    const { upId, date, type } = req.query;
+    if (!upId || !date || !type) {
+      return res.status(400).json({ error: 'Missing required parameters upId, date, or type.' });
+    }
+    const values = await dbService.getObservations(upId, date, type);
+    res.json({ values });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/db/observations', async (req, res) => {
+  try {
+    const { upId, date, type, values } = req.body;
+    if (!upId || !date || !type || !values) {
+      return res.status(400).json({ error: 'Missing required body fields upId, date, type, or values.' });
+    }
+    await dbService.saveObservations(upId, date, type, values);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Outages Storage Endpoints
+ */
+app.get('/api/db/outages', async (req, res) => {
+  try {
+    const { upId } = req.query;
+    if (!upId) {
+      return res.status(400).json({ error: 'Missing required parameter upId.' });
+    }
+    const outages = await dbService.getOutages(upId);
+    res.json({ outages });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/db/outages', async (req, res) => {
+  try {
+    const { outages } = req.body;
+    if (!Array.isArray(outages)) {
+      return res.status(400).json({ error: 'Body field outages must be an array.' });
+    }
+    await dbService.saveOutages(outages);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Database Administration Endpoints
+ */
+app.post('/api/db/clear', async (req, res) => {
+  try {
+    await dbService.clearDatabase();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/db/retention', async (req, res) => {
+  try {
+    const { limitDate } = req.body;
+    if (!limitDate) {
+      return res.status(400).json({ error: 'Missing required body field limitDate.' });
+    }
+    const results = await dbService.deleteOlderThan(limitDate);
+    res.json({ success: true, results });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Registry (UP Fleet) Endpoints
+ */
+app.get('/api/registry', async (req, res) => {
+  try {
+    const registry = await dbService.getRegistry();
+    // Map database fields to frontend structure (e.g. scada_disabled 1/0 to true/false)
+    const formatted = registry.map(up => ({
+      id: up.id,
+      name: up.name,
+      tech: up.tech,
+      region: up.region,
+      capacity: up.capacity,
+      lat: up.lat,
+      lon: up.lon,
+      ppa_partner: up.ppa_partner,
+      scada_disabled: up.scada_disabled === 1
+    }));
+    res.json(formatted);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/registry', async (req, res) => {
+  try {
+    const upList = req.body;
+    if (!Array.isArray(upList)) {
+      return res.status(400).json({ error: 'Registry payload must be an array of production units.' });
+    }
+    await dbService.saveRegistry(upList);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/registry/reset', async (req, res) => {
+  try {
+    await dbService.resetRegistry();
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/registry/update', async (req, res) => {
+  try {
+    const { upId, ppaPartner, scadaDisabled } = req.body;
+    if (!upId) {
+      return res.status(400).json({ error: 'Missing required field upId.' });
+    }
+    await dbService.updateUPPpaAndScada(upId, ppaPartner, scadaDisabled);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * PPA Tags Endpoints
+ */
+app.get('/api/ppa/tags', async (req, res) => {
+  try {
+    const tags = await dbService.getPpaTags();
+    res.json(tags);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/ppa/tags', async (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name || !color) {
+      return res.status(400).json({ error: 'Missing name or color fields.' });
+    }
+    await dbService.savePpaTag(name, color);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/ppa/tags', async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Missing name in request body.' });
+    }
+    await dbService.deletePpaTag(name);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`==================================================`);
   console.log(` Telemetry Dashboard Backend running on port ${PORT}`);
-  console.log(` Mode: proxying queries to Azure API Gateway`);
+  console.log(` Database: SQLite Centralized Store enabled`);
   console.log(`==================================================`);
 });

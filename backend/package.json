@@ -1,7 +1,7 @@
 {
   "name": "telemetry-outage-backend",
   "version": "1.0.0",
-  "description": "Secure proxy backend for Telemetry & Outage Integrity Dashboard",
+  "description": "Secure proxy backend with centralized SQLite for Telemetry & Outage Integrity Dashboard",
   "main": "server.js",
   "type": "module",
   "scripts": {
@@ -10,6 +10,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "sqlite3": "^5.1.7"
   }
 }

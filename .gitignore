@@ -41,3 +41,5 @@ Thumbs.db
 .pnp/
 .pnp.js
 .gemini/
+*.sqlite
+*.db

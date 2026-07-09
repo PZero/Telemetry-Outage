@@ -1,310 +1,176 @@
-// IndexedDB manager for local storage persistence of UP telemetry and outages.
+// SQLite Database proxy manager for centralized storage.
+// Replaces IndexedDB client-side storage with secure backend SQLite calls.
 
-const DB_NAME = "UPTelemetryDB";
-const DB_VERSION = 10;
-
-let dbInstance = null;
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 /**
- * Initializes the IndexedDB database.
- * Sets up object stores:
- *  - 'observations' with key path 'key' (up_id|date|type)
- *  - 'outages' with key path 'outage_id' and index on 'up_id'
+ * No-op initialization for compatibility.
  */
 export function initDB() {
-  return new Promise((resolve, reject) => {
-    if (dbInstance) {
-      resolve(dbInstance);
-      return;
-    }
-
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-    request.onupgradeneeded = (event) => {
-      const db = event.target.result;
-
-      // Observations store: key is "up_id|date|type"
-      if (!db.objectStoreNames.contains("observations")) {
-        db.createObjectStore("observations", { keyPath: "key" });
-      }
-
-      // Outages store: key is "outage_id"
-      if (!db.objectStoreNames.contains("outages")) {
-        const outageStore = db.createObjectStore("outages", { keyPath: "outage_id" });
-        outageStore.createIndex("up_id", "up_id", { unique: false });
-        outageStore.createIndex("startDate", "startDate", { unique: false });
-      }
-    };
-
-    request.onsuccess = (event) => {
-      dbInstance = event.target.result;
-      
-      // Request persistent storage if available
-      requestPersistentStorage();
-      
-      resolve(dbInstance);
-    };
-
-    request.onerror = (event) => {
-      console.error("IndexedDB initialization error:", event.target.error);
-      reject(event.target.error);
-    };
-  });
+  return Promise.resolve(true);
 }
 
 /**
- * Requests browser persistent storage to prevent automatic eviction.
- */
-async function requestPersistentStorage() {
-  if (navigator.storage && navigator.storage.persist) {
-    try {
-      const isPersisted = await navigator.storage.persist();
-      console.log(`[Storage] Persistent storage granted: ${isPersisted ? "🟢 YES" : "🔴 NO (Best Effort)"}`);
-      return isPersisted;
-    } catch (err) {
-      console.warn("[Storage] Error requesting persistence:", err);
-    }
-  }
-  return false;
-}
-
-/**
- * Gets storage persistence status.
+ * Gets persistence status (always true as backend handles persistence).
  */
 export async function getPersistenceStatus() {
-  if (navigator.storage && navigator.storage.persisted) {
-    return await navigator.storage.persisted();
-  }
-  return false;
+  return true;
 }
 
 /**
- * Saves a single daily telemetry record for a specific type (meter/scada).
- * @param {string} upId 
- * @param {string} date YYYY-MM-DD
- * @param {string} type meter | scada
- * @param {Array<number|null>} values Flat array of telemetry points
+ * Saves daily telemetry observations to the centralized database.
  */
 export async function saveObservations(upId, date, type, values) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("observations", "readwrite");
-    const store = transaction.objectStore("observations");
-    
-    const key = `${upId}|${date}|${type}`;
-    const record = {
-      key,
+  try {
+    const url = `${BASE_URL}/api/db/observations`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ upId, date, type, values })
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    return true;
+  } catch (err) {
+    console.error('[Storage Proxy] saveObservations failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Retrieves daily observations telemetry from the centralized database.
+ */
+export async function getObservations(upId, date, type) {
+  try {
+    const url = `${BASE_URL}/api/db/observations?upId=${upId}&date=${date}&type=${type}`;
+    const response = await fetch(url);
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    const data = await response.json();
+    return data.values || null;
+  } catch (err) {
+    console.error('[Storage Proxy] getObservations failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Retrieves a daily telemetry record object with all metadata.
+ */
+export async function getObservationRecord(upId, date, type) {
+  try {
+    const values = await getObservations(upId, date, type);
+    if (!values) return null;
+    return {
+      key: `${upId}|${date}|${type}`,
       up_id: upId,
       date,
       type,
       values,
       updated_at: new Date().toISOString()
     };
-
-    const request = store.put(record);
-
-    request.onsuccess = () => resolve(true);
-    request.onerror = (event) => reject(event.target.error);
-  });
-}
-
-/**
- * Retrieves a daily telemetry record.
- * @param {string} upId 
- * @param {string} date YYYY-MM-DD
- * @param {string} type meter | scada
- * @returns {Promise<Array<number|null>|null>}
- */
-export async function getObservations(upId, date, type) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("observations", "readonly");
-    const store = transaction.objectStore("observations");
-    const key = `${upId}|${date}|${type}`;
-    
-    const request = store.get(key);
-
-    request.onsuccess = (event) => {
-      const result = event.target.result;
-      resolve(result ? result.values : null);
-    };
-    request.onerror = (event) => reject(event.target.error);
-  });
-}
-
-/**
- * Retrieves a daily telemetry record object with all metadata.
- * @param {string} upId 
- * @param {string} date YYYY-MM-DD
- * @param {string} type meter | scada
- * @returns {Promise<Object|null>}
- */
-export async function getObservationRecord(upId, date, type) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("observations", "readonly");
-    const store = transaction.objectStore("observations");
-    const key = `${upId}|${date}|${type}`;
-    
-    const request = store.get(key);
-
-    request.onsuccess = (event) => {
-      resolve(event.target.result || null);
-    };
-    request.onerror = (event) => reject(event.target.error);
-  });
+  } catch (err) {
+    console.error('[Storage Proxy] getObservationRecord failed:', err);
+    return null;
+  }
 }
 
 /**
  * Saves outages in bulk.
- * @param {Array<Object>} outagesList 
  */
 export async function saveOutages(outagesList) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    if (outagesList.length === 0) {
-      resolve(true);
-      return;
-    }
-    const transaction = db.transaction("outages", "readwrite");
-    const store = transaction.objectStore("outages");
-
-    transaction.oncomplete = () => resolve(true);
-    transaction.onerror = (event) => reject(event.target.error);
-
-    outagesList.forEach(outage => {
-      // Ensure outage has an id
-      if (!outage.outage_id) {
-        outage.outage_id = `outage_${outage.up_id}_${outage.startDate.replace(/[:.-]/g, "")}`;
-      }
-      store.put(outage);
+  try {
+    const url = `${BASE_URL}/api/db/outages`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ outages: outagesList })
     });
-  });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    return true;
+  } catch (err) {
+    console.error('[Storage Proxy] saveOutages failed:', err);
+    return false;
+  }
 }
 
 /**
  * Retrieves all outages registered for a specific UP.
- * @param {string} upId 
- * @returns {Promise<Array<Object>>}
  */
 export async function getOutages(upId) {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("outages", "readonly");
-    const store = transaction.objectStore("outages");
-    const index = store.index("up_id");
-    const request = index.getAll(upId);
-
-    request.onsuccess = (event) => {
-      resolve(event.target.result || []);
-    };
-    request.onerror = (event) => reject(event.target.error);
-  });
+  try {
+    const url = `${BASE_URL}/api/db/outages?upId=${upId}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    const data = await response.json();
+    return data.outages || [];
+  } catch (err) {
+    console.error('[Storage Proxy] getOutages failed:', err);
+    return [];
+  }
 }
 
 /**
- * Get outages overlapping with a day/date range for a specific UP
- * @param {string} upId 
- * @param {string} startDateISO e.g. "2026-05-10T00:00:00Z"
- * @param {string} endDateISO e.g. "2026-05-10T23:59:59Z"
+ * Get outages overlapping with a day/date range for a specific UP.
  */
 export async function getOutagesForPeriod(upId, startDateISO, endDateISO) {
-  const allOutages = await getOutages(upId);
-  const start = new Date(startDateISO).getTime();
-  const end = new Date(endDateISO).getTime();
+  try {
+    const allOutages = await getOutages(upId);
+    const start = new Date(startDateISO).getTime();
+    const end = new Date(endDateISO).getTime();
 
-  // Filter outages that intersect with the requested range
-  return allOutages.filter(o => {
-    const oStart = new Date(o.startDate).getTime();
-    const oEnd = new Date(o.endDate).getTime();
-    
-    // Intersection condition: start of one is before or at end of another, and vice-versa
-    return oStart <= end && oEnd >= start;
-  });
+    // Filter outages that intersect with the requested range
+    return allOutages.filter(o => {
+      const oStart = new Date(o.startDate).getTime();
+      const oEnd = new Date(o.endDate).getTime();
+      
+      // Intersection condition
+      return oStart <= end && oEnd >= start;
+    });
+  } catch (err) {
+    console.error('[Storage Proxy] getOutagesForPeriod failed:', err);
+    return [];
+  }
 }
 
 /**
- * Clears all local database stores.
+ * Clears all central database observations and outages.
  */
 export async function clearDatabase() {
-  const db = await initDB();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(["observations", "outages"], "readwrite");
-    const obsStore = transaction.objectStore("observations");
-    const outStore = transaction.objectStore("outages");
-
-    obsStore.clear();
-    outStore.clear();
-
-    transaction.oncomplete = () => {
-      console.log("[Storage] Database cleared successfully.");
-      resolve(true);
-    };
-    transaction.onerror = (event) => {
-      console.error("[Storage] Error clearing database:", event.target.error);
-      reject(event.target.error);
-    };
-  });
+  try {
+    const url = `${BASE_URL}/api/db/clear`;
+    const response = await fetch(url, { method: 'POST' });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    console.log('[Storage Proxy] Database cleared successfully.');
+    return true;
+  } catch (err) {
+    console.error('[Storage Proxy] clearDatabase failed:', err);
+    return false;
+  }
 }
 
 /**
- * Deletes records older than a specific date string (retention policy enforcement).
- * @param {string} limitDate YYYY-MM-DD
+ * Deletes records older than a specific date string (retention policy).
  */
 export async function deleteOlderThan(limitDate) {
-  const db = await initDB();
-  
-  // Clean observations
-  const obsPromise = new Promise((resolve, reject) => {
-    const transaction = db.transaction("observations", "readwrite");
-    const store = transaction.objectStore("observations");
-    const request = store.openCursor();
-    let deletedCount = 0;
-
-    request.onsuccess = (event) => {
-      const cursor = event.target.result;
-      if (cursor) {
-        const record = cursor.value;
-        // Compare dates (e.g., "2026-04-12" < "2026-05-01")
-        if (record.date < limitDate) {
-          cursor.delete();
-          deletedCount++;
-        }
-        cursor.continue();
-      } else {
-        resolve(deletedCount);
-      }
-    };
-    request.onerror = (event) => reject(event.target.error);
-  });
-
-  // Clean outages
-  const outPromise = new Promise((resolve, reject) => {
-    const transaction = db.transaction("outages", "readwrite");
-    const store = transaction.objectStore("outages");
-    const request = store.openCursor();
-    let deletedCount = 0;
-
-    request.onsuccess = (event) => {
-      const cursor = event.target.result;
-      if (cursor) {
-        const record = cursor.value;
-        // Check if outage end date is before the limit date
-        // Format of record.endDate is ISO String (e.g. "2026-04-12T14:30:00Z")
-        const endDay = record.endDate.substring(0, 10);
-        if (endDay < limitDate) {
-          cursor.delete();
-          deletedCount++;
-        }
-        cursor.continue();
-      } else {
-        resolve(deletedCount);
-      }
-    };
-    request.onerror = (event) => reject(event.target.error);
-  });
-
-  const [obsCount, outCount] = await Promise.all([obsPromise, outPromise]);
-  console.log(`[Storage] Retention policy wiped: ${obsCount} observations, ${outCount} outages older than ${limitDate}.`);
-  return { observations: obsCount, outages: outCount };
+  try {
+    const url = `${BASE_URL}/api/db/retention`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ limitDate })
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    const data = await response.json();
+    console.log(`[Storage Proxy] Retention policy enforced.`, data.results);
+    return data.results || { observations: 0, outages: 0 };
+  } catch (err) {
+    console.error('[Storage Proxy] deleteOlderThan failed:', err);
+    return { observations: 0, outages: 0 };
+  }
 }

@@ -1,5 +1,7 @@
-// Deterministic Registry of 100 Production Units (UPs)
-// 50 Wind Units, 50 Solar Units, distributed across Italian regions.
+// Centralized Registry of 100 Production Units (UPs)
+// Fetches state dynamically from the backend SQLite database.
+
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
 const regions = [
   "Sicilia", "Sardegna", "Puglia", "Campania", "Calabria", 
@@ -35,24 +37,28 @@ const solarNames = [
 export const UP_REGISTRY = [];
 export const UNIQUE_REGIONS = [];
 
-export function loadUPRegistry() {
-  const custom = localStorage.getItem("custom_up_registry");
-  if (custom) {
-    try {
-      const parsed = JSON.parse(custom);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        UP_REGISTRY.length = 0;
-        UP_REGISTRY.push(...parsed);
-        updateUniqueRegions();
-        console.log(`[Registry] Loaded ${parsed.length} custom UPs from localStorage.`);
-        return;
-      }
-    } catch (err) {
-      console.error("[Registry] Failed to parse custom UP registry:", err);
-    }
+/**
+ * Loads the registry asynchronously from the backend SQLite database.
+ */
+export async function loadUPRegistry() {
+  try {
+    const response = await fetch(`${BASE_URL}/api/registry`);
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    const data = await response.json();
+    UP_REGISTRY.length = 0;
+    UP_REGISTRY.push(...data);
+    updateUniqueRegions();
+    console.log(`[Registry] Loaded ${data.length} UPs from backend database.`);
+  } catch (err) {
+    console.error("[Registry] Failed to fetch registry from backend, using local mock:", err);
+    loadDefaultMockRegistry();
   }
+}
 
-  // Fallback to default deterministic mock UPs
+/**
+ * Generates local mock registry fallback if backend is unreachable.
+ */
+function loadDefaultMockRegistry() {
   UP_REGISTRY.length = 0;
   
   // Populate Wind UPs (1 to 50)
@@ -66,7 +72,9 @@ export function loadUPRegistry() {
       region: regions[regionIndex],
       capacity: capacity,
       lat: 37.0 + ((i * 13) % 100) / 15,
-      lon: 12.0 + ((i * 17) % 100) / 18
+      lon: 12.0 + ((i * 17) % 100) / 18,
+      ppa_partner: null,
+      scada_disabled: false
     });
   }
 
@@ -81,7 +89,9 @@ export function loadUPRegistry() {
       region: regions[regionIndex],
       capacity: capacity,
       lat: 36.5 + ((i * 19) % 100) / 15,
-      lon: 12.5 + ((i * 23) % 100) / 18
+      lon: 12.5 + ((i * 23) % 100) / 18,
+      ppa_partner: null,
+      scada_disabled: false
     });
   }
 
@@ -94,8 +104,8 @@ function updateUniqueRegions() {
   UNIQUE_REGIONS.push(...regionsSet);
 }
 
-// Initial load
-loadUPRegistry();
+// Initial load (sync fallback, async will update when main.js calls it on startup)
+loadDefaultMockRegistry();
 
 // Helper to get UP details by ID or Name
 export function getUPById(id) {
@@ -104,24 +114,29 @@ export function getUPById(id) {
 }
 
 export function isScadaDisabled(upId) {
-  try {
-    const list = JSON.parse(localStorage.getItem("disabled_scada_ups") || "[]");
-    return list.includes(upId);
-  } catch (e) {
-    return false;
-  }
+  const up = getUPById(upId);
+  return up ? up.scada_disabled : false;
 }
 
-export function setScadaDisabled(upId, disabled) {
+export async function setScadaDisabled(upId, disabled) {
   try {
-    let list = JSON.parse(localStorage.getItem("disabled_scada_ups") || "[]");
-    if (disabled) {
-      if (!list.includes(upId)) list.push(upId);
-    } else {
-      list = list.filter(id => id !== upId);
-    }
-    localStorage.setItem("disabled_scada_ups", JSON.stringify(list));
-  } catch (e) {
-    console.error(e);
+    const response = await fetch(`${BASE_URL}/api/registry/update`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ upId, scadaDisabled: disabled })
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    
+    // Update local state in memory
+    const up = getUPById(upId);
+    if (up) up.scada_disabled = disabled;
+    
+    console.log(`[Registry] SCADA disabled status updated for ${upId} to:`, disabled);
+    return true;
+  } catch (err) {
+    console.error('[Registry Proxy] setScadaDisabled failed:', err);
+    return false;
   }
 }
