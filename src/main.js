@@ -6,8 +6,8 @@ window.onerror = function(message, source, lineno, colno, error) {
 };
 
 import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry } from "./registry.js";
-import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations } from "./db.js";
-import { isSimulatedMode, setSimulatedMode, getAuthHeaders } from "./api.js";
+import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations, saveObservations, saveOutages } from "./db.js";
+import { isSimulatedMode, setSimulatedMode, getAuthHeaders, fetchObservations, fetchOutages } from "./api.js";
 import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats } from "./ui.js";
 
 // Global Application State
@@ -1886,8 +1886,29 @@ async function runMainSyncQueue() {
     // Notify clients/UI that task started
     updateSettingsLogs(`Richiesta inviata: ${task.type.toUpperCase()} (${task.upName || task.upId}, Giorno: ${task.date})`);
 
-    // Post to Service Worker and await resolution
-    const result = await sendTaskToSW(task);
+    // Execute task directly using central backend proxy API
+    let result = { success: false };
+    try {
+      if (task.type === "meter" || task.type === "scada") {
+        let values;
+        if (task.type === "scada" && task.noScada) {
+          const steps = (task.upTech === "Wind") ? 144 : 96;
+          values = Array(steps).fill(null);
+          await saveObservations(task.upId, task.date, task.type, values);
+          result = { success: true, details: `Marcata come NO-SCADA (${steps} punti nulli)` };
+        } else {
+          values = await fetchObservations(task.upId, task.date, task.type);
+          await saveObservations(task.upId, task.date, task.type, values);
+          result = { success: true, details: `Telemetria salvata (${values ? values.length : 0} punti)` };
+        }
+      } else if (task.type === "outages") {
+        const outages = await fetchOutages(task.upId, task.date, task.date);
+        await saveOutages(outages);
+        result = { success: true, details: `Salvati ${outages ? outages.length : 0} outages` };
+      }
+    } catch (err) {
+      result = { success: false, error: err.message || String(err) };
+    }
     
     state.completedTasks++;
     delete state.activeSyncTasks[taskKey];
@@ -1955,37 +1976,7 @@ async function runMainSyncQueue() {
   }
 }
 
-/**
- * Sends a single task to the Service Worker and awaits response via MessageChannel.
- */
-function sendTaskToSW(task) {
-  task.apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
-  return new Promise((resolve) => {
-    if (!("serviceWorker" in navigator)) {
-      resolve({ success: false, error: "I Service Worker non sono supportati in questo browser." });
-      return;
-    }
-    navigator.serviceWorker.ready.then((reg) => {
-      const worker = navigator.serviceWorker.controller || reg.active || reg.waiting || reg.installing;
-      if (!worker) {
-        resolve({ success: false, error: "Nessun Service Worker attivo trovato." });
-        return;
-      }
-
-      const channel = new MessageChannel();
-      channel.port1.onmessage = (event) => {
-        resolve(event.data);
-      };
-
-      worker.postMessage(
-        { action: "PROCESS_SINGLE_TASK", task },
-        [channel.port2]
-      );
-    }).catch(err => {
-      resolve({ success: false, error: `Errore Service Worker: ${err.message}` });
-    });
-  });
-}
+// sendTaskToSW removed - tasks are executed directly in the main thread via backend REST API.
 
 /**
  * Updates progress and status labels inside UI
