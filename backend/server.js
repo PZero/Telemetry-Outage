@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import { dbService } from './database.js';
 import { enqueueRequest, getQueueStatus } from './queue.js';
 import { requireGoogleAuth, requireAdmin } from './auth.js';
+import { startSync, cancelSync, getSyncStatus } from './sync.js';
 
 // Load environment variables
 dotenv.config();
@@ -296,6 +297,28 @@ app.get('/api/db/stats', async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+/**
+ * Background Sync Queue Endpoints
+ */
+app.post('/api/sync/start', requireAdmin, async (req, res) => {
+  try {
+    const { rangeDays, isSelective, upId, simMode } = req.body;
+    await startSync({ rangeDays: parseInt(rangeDays) || 30, isSelective: !!isSelective, upId: upId || 'all', simMode: !!simMode }, proxyToAzure);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/sync/cancel', requireAdmin, (req, res) => {
+  cancelSync();
+  res.json({ success: true });
+});
+
+app.get('/api/sync/status', requireGoogleAuth, (req, res) => {
+  res.json(getSyncStatus());
 });
 
 /**
