@@ -35,7 +35,7 @@
       }, 3000);
     });
   </script>
-  <script type="module" crossorigin src="./assets/index-Dh9ZShjh.js"></script>
+  <script type="module" crossorigin src="./assets/index-BzI-50WR.js"></script>
   <link rel="stylesheet" crossorigin href="./assets/index-Lb2Ca7_M.css">
 </head>
 <body>
@@ -848,6 +848,39 @@
               <button id="reset-fleet-import-btn" class="btn btn-danger" style="font-size: 0.8rem; padding: 8px; color: var(--accent-red); background: transparent;">
                 🔄 Reset
               </button>
+            </div>
+          </div>
+          
+          <!-- Card 5: Gestione Utenze (Admin only) -->
+          <div class="settings-card" style="grid-column: span 2; display: flex; flex-direction: column; gap: 12px; min-height: 250px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <h3 style="margin: 0;">👥 Gestione Ruoli & Utenze</h3>
+                <p style="margin: 4px 0 0 0;">Visualizza gli utenti che hanno eseguito l'accesso e gestisci i loro privilegi di amministratore.</p>
+              </div>
+              <button id="refresh-users-btn" class="icon-btn" style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); color: #60a5fa; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                🔄 Aggiorna Lista
+              </button>
+            </div>
+            
+            <div style="flex-grow: 1; overflow-x: auto; background: rgba(0,0,0,0.15); border: 1px solid var(--panel-border); border-radius: 10px; margin-top: 10px;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.75rem;">
+                <thead>
+                  <tr style="border-bottom: 1px solid var(--panel-border); background: rgba(255,255,255,0.02); height: 35px;">
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); width: 40px;"></th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted);">Nome</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted);">Email</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); width: 100px;">Ruolo</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); text-align: right; width: 150px;">Azioni</th>
+                  </tr>
+                </thead>
+                <tbody id="settings-users-tbody">
+                  <!-- Dynamic user rows will be loaded here -->
+                  <tr style="height: 60px;">
+                    <td colspan="5" style="text-align: center; color: var(--text-muted); font-style: italic;">Caricamento utenti...</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </div>
           
