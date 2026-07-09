@@ -5,7 +5,14 @@ import { getUPById, isScadaDisabled } from "./registry.js";
 import { getObservations, getOutagesForPeriod, getObservationRecord } from "./db.js";
 
 // Helper: Classifies the integrity of a single day for a UP
-// Returns: 'green' | 'red' | 'orange' | 'grey'
+// Returns: 'green' | 'orange' | 'red' | 'grey'
+// Rules:
+//   - Both METER and SCADA present with data  → GREEN
+//   - Only one of the two present             → ORANGE (yellow)
+//   - Neither present, no outages             → RED
+//   - Neither present, full outage            → GREY
+//   - UP marked as NO-SCADA, meter present    → GREEN
+//   - UP marked as NO-SCADA, meter absent     → RED
 export async function classifyDayIntegrity(up, dateStr) {
   const meterRecord = await getObservationRecord(up.id, dateStr, "meter");
   const scadaRecord = await getObservationRecord(up.id, dateStr, "scada");
@@ -44,97 +51,61 @@ export async function classifyDayIntegrity(up, dateStr) {
   }
   apiErrorMessage = apiErrorMessage.trim();
 
-  const wrapResult = (status) => {
-    return { 
-      status, 
-      importedInDelay, 
-      importDate,
-      meterValids,
-      meterSteps: stepsMeter,
-      scadaValids,
-      scadaSteps: stepsScada,
-      apiError: isApiError,
-      apiErrorMessage: apiErrorMessage,
-      meterValues: meterValues,
-      scadaValues: scadaValues
-    };
-  };
+  const wrapResult = (status) => ({
+    status,
+    importedInDelay,
+    importDate,
+    meterValids,
+    meterSteps: stepsMeter,
+    scadaValids,
+    scadaSteps: stepsScada,
+    apiError: isApiError,
+    apiErrorMessage,
+    meterValues,
+    scadaValues
+  });
 
-  // If no data exists in IndexedDB for both, check if we have outages covering the whole day
-  if (!meterValues && !scadaValues) {
+  // Determine presence: a stream is "present" if it has at least some valid (non-null) values
+  const meterPresent = meterValids > 0;
+  // For SCADA-disabled UPs, we treat SCADA as "not applicable" (virtually present)
+  const noScada = up.scada_disabled === true || up.scada_disabled === 1;
+  const scadaPresent = noScada ? true : scadaValids > 0;
+
+  if (meterPresent && scadaPresent) {
+    // Both present → check if fully complete or has gaps
+    const meterFull = meterValues && meterValids === stepsMeter;
+    const scadaFull = noScada || (scadaValues && scadaValids === stepsScada);
+
+    if (meterFull && scadaFull) {
+      return wrapResult("green");
+    }
+
+    // Has some data but not full — check if gaps are justified by outages
     if (outages.length > 0) {
-      // Check if outages cover the full day (e.g. total shutdown)
+      const totalOutage = outages.some(o => o.reductionPercentage === 100);
+      if (totalOutage) return wrapResult("grey");
+    }
+
+    // Partial data present — still green if both streams exist even if not 100%
+    return wrapResult("green");
+  }
+
+  if (!meterPresent && !scadaPresent) {
+    // Neither present → check if justified by a full-day outage
+    if (outages.length > 0) {
       const totalOutage = outages.some(o => o.reductionPercentage === 100);
       return wrapResult(totalOutage ? "grey" : "red");
     }
-    return wrapResult("red"); // Missing completely
-  }
-
-  // We will divide the day into 288 slots of 5 minutes to cross-examine
-  let greenSlots = 0;
-  let justifiedSlots = 0;
-  let gapSlots = 0;
-  let mismatchSlots = 0;
-
-  const dayStart = new Date(`${dateStr}T00:00:00Z`).getTime();
-
-  for (let j = 0; j < 288; j++) {
-    const slotMin = j * 5;
-    const timeMs = dayStart + slotMin * 60 * 1000;
-    
-    // Map to indices
-    const mIdx = Math.floor(slotMin / 15);
-    const sIdx = Math.floor(slotMin / (up.tech === "Wind" ? 10 : 15));
-
-    const mVal = meterValues ? meterValues[mIdx] : null;
-    const sVal = scadaValues ? scadaValues[sIdx] : null;
-
-    const mOk = mVal !== null && mVal !== undefined;
-    const sOk = sVal !== null && sVal !== undefined;
-
-    // Check outage status at this slot time
-    const activeOutage = outages.find(o => {
-      const oStart = new Date(o.startDate).getTime();
-      const oEnd = new Date(o.endDate).getTime();
-      return timeMs >= oStart && timeMs <= oEnd;
-    });
-
-    if (mOk && sOk) {
-      greenSlots++;
-    } else if (!mOk && !sOk) {
-      // Both are missing (true gap)
-      if (activeOutage) {
-        justifiedSlots++;
-      } else {
-        gapSlots++;
-      }
-    } else {
-      // One is present, other is missing (flow mismatch)
-      if (activeOutage) {
-        justifiedSlots++;
-      } else {
-        mismatchSlots++;
-      }
-    }
-  }
-
-  // 1. If we have any slots with absolutely no telemetry (both missing, no outage)
-  if (gapSlots > 0) {
     return wrapResult("red");
   }
 
-  // 2. If we have any flow mismatches (one stream missing, the other present, no outage)
-  if (mismatchSlots > 0) {
-    return wrapResult("orange");
+  // Only one stream present → ORANGE (yellow)
+  // If there's a total outage justifying the missing stream, classify as grey
+  if (outages.length > 0) {
+    const totalOutage = outages.some(o => o.reductionPercentage === 100);
+    if (totalOutage) return wrapResult("grey");
   }
-
-  // 3. If there are missing telemetries but they are all covered by active outages
-  if (justifiedSlots > 0) {
-    return wrapResult("grey");
-  }
-
-  // 4. Otherwise, both streams are 100% complete
-  return wrapResult("green");
+  return wrapResult("orange");
 }
 
 /**
