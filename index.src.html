@@ -1,0 +1,939 @@
+﻿<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Telemetry & Outage Integrity Dashboard (PWA) - Monitoraggio ad alta densit├á per 100 Unit├á di Produzione">
+  <title>Telemetry & Outage Integrity Dashboard</title>
+  
+  <!-- Manifest & Favicon -->
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/svg+xml" href="./assets/logo.svg">
+  <meta name="theme-color" content="#10b981">
+  
+  <!-- CSS Stylesheet -->
+  <link rel="stylesheet" href="./src/styles.css">
+  
+  <!-- Google Identity Services (OAuth 2.0) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+  <script>
+    window.onerror = function(message, source, lineno, colno, error) {
+      alert(`[Early Error Boundary]\n${message}\nFile: ${source}\nRiga: ${lineno}:${colno}`);
+    };
+    window.addEventListener('error', function(event) {
+      if (event.target && event.target.tagName === 'SCRIPT') {
+        alert(`[Loader Error]\nImpossibile caricare lo script: ${event.target.src}\nVerificare se ci sono estensioni che lo bloccano o effettuare un hard refresh.`);
+      }
+    }, true);
+    window.APP_VERSION = "v80";
+    // Diagnostic: verify app boots correctly after DOM is ready
+    document.addEventListener('DOMContentLoaded', function() {
+      setTimeout(function() {
+        var reg = window.appState;
+        if (!reg) {
+          alert('[Diagnostica Avvio]\nIl modulo principale (main.js) NON si ├¿ caricato correttamente.\nIl file potrebbe essere bloccato dalla cache del Service Worker.\n\nAzione: premi F12 ÔåÆ Application ÔåÆ Service Workers ÔåÆ Unregister, poi Ctrl+F5.');
+        }
+      }, 3000);
+    });
+  </script>
+</head>
+<body>
+  <!-- ==========================================
+       LOGIN OVERLAY SCREEN (GOOGLE AUTHENTICATION)
+       ========================================== -->
+  <div id="login-screen" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: radial-gradient(circle at center, #0f172a 0%, #020617 100%); z-index: 9999; display: flex; align-items: center; justify-content: center; overflow: hidden; transition: opacity 0.5s ease;">
+    <!-- Abstract glowing backgrounds -->
+    <div style="position: absolute; width: 400px; height: 400px; background: rgba(16, 185, 129, 0.08); filter: blur(100px); border-radius: 50%; top: -100px; left: -100px;"></div>
+    <div style="position: absolute; width: 500px; height: 500px; background: rgba(59, 130, 246, 0.06); filter: blur(120px); border-radius: 50%; bottom: -150px; right: -150px;"></div>
+
+    <div style="width: 380px; padding: 40px; background: rgba(15, 23, 42, 0.6); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 20px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); text-align: center; display: flex; flex-direction: column; align-items: center; gap: 24px; position: relative; z-index: 10;">
+      <!-- Logo and Brand -->
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 12px;">
+        <img src="./assets/logo.svg" alt="Logo" style="width: 50px; height: 50px; filter: drop-shadow(0 0 10px rgba(16,185,129,0.4));">
+        <div>
+          <h2 style="font-size: 1.4rem; font-weight: 800; margin: 0; background: linear-gradient(135deg, #4ade80 0%, #3b82f6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 0.05em; text-transform: uppercase;">UP Data Check</h2>
+          <p style="font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin: 4px 0 0 0;">Telemetry & Outage Integrity</p>
+        </div>
+      </div>
+
+      <div style="height: 1px; width: 100%; background: linear-gradient(to right, transparent, rgba(255,255,255,0.08), transparent);"></div>
+
+      <!-- Welcome message -->
+      <div style="text-align: center;">
+        <h3 style="font-size: 0.9rem; font-weight: 600; color: var(--text-main); margin: 0 0 8px 0;">Accesso Richiesto</h3>
+        <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; margin: 0;">Esegui l'accesso per monitorare le telemetrie e gli outages delle 100 unit├á di produzione.</p>
+      </div>
+
+      <!-- Google Button / Mock Login Button -->
+      <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 50px; justify-content: center;">
+        <!-- Real Google Button Container -->
+        <div id="google-signin-btn-container" style="width: 100%; display: flex; justify-content: center;">
+          <div id="google-signin-btn"></div>
+        </div>
+        
+        <!-- Mock Login Button (visible only in Demo/Bypass mode) -->
+        <button id="mock-signin-btn" style="display: none; width: 100%; padding: 10px 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border: none; border-radius: 8px; color: white; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(16,185,129,0.25);" onmouseover="this.style.opacity=0.9" onmouseout="this.style.opacity=1">
+          ­ƒöÉ Accedi in Modalit├á Sviluppo (Demo)
+        </button>
+      </div>
+      
+      <!-- Footer Note -->
+      <span id="login-footer-note" style="font-size: 0.58rem; color: var(--text-muted); line-height: 1.4;">
+        Google Sign-In abilitato. I tuoi dati personali non vengono registrati su database di terze parti.
+      </span>
+    </div>
+  </div>
+
+  <div id="app-container" style="display: flex; flex-direction: row; height: 100vh; width: 100vw; overflow: hidden;">
+    
+    <!-- ==========================================
+         LEFT SIDEBAR: BRAND & VERTICAL NAVIGATION
+         ========================================== -->
+    <aside class="app-sidebar" style="width: 220px; min-width: 220px; background: #0b0f19; border-right: 1px solid var(--panel-border); display: flex; flex-direction: column; justify-content: space-between; z-index: 130; box-shadow: 4px 0 20px rgba(0,0,0,0.35); flex-shrink: 0;">
+      <div>
+        <!-- Logo and Brand -->
+        <div style="display: flex; align-items: center; justify-content: space-between; padding: 20px 16px; border-bottom: 1px solid rgba(255,255,255,0.05); margin-bottom: 16px; height: 69px;">
+          <div style="display: flex; align-items: center; gap: 12px;" class="sidebar-brand-wrapper">
+            <img src="./assets/logo.svg" alt="Integrity Logo" style="width: 28px; height: 28px; filter: drop-shadow(0 0 4px rgba(16,185,129,0.5)); flex-shrink: 0;">
+            <div style="display: flex; flex-direction: column;" class="sidebar-hide-on-collapse">
+              <h1 style="font-size: 0.85rem; font-weight: 700; margin: 0; background: linear-gradient(135deg, #4ade80 0%, #3b82f6 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; white-space: nowrap; letter-spacing: 0.05em;">UP DATA CHECK</h1>
+              <span style="font-size: 0.5rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: -2px; white-space: nowrap;">Telemetry & Outage</span>
+            </div>
+          </div>
+          <!-- Collapse Toggle Button -->
+          <button id="sidebar-toggle-btn" class="icon-btn" style="background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px; display: flex; align-items: center; justify-content: center; transition: color 0.2s; outline: none;">
+            <span id="sidebar-toggle-icon" style="font-size: 0.95rem; font-weight: 700; user-select: none;">ÔùÇ</span>
+          </button>
+        </div>
+
+        <!-- Vertical Navigation Links -->
+        <nav class="sidebar-tabs" style="display: flex; flex-direction: column; gap: 4px; padding: 0 8px;">
+          <button id="nav-fleet-btn" onclick="window.navigateToView ? window.navigateToView('fleet') : null" class="sidebar-tab-btn active" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-main); background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
+            <span>­ƒôï</span> <span class="sidebar-hide-on-collapse">Mappa Flotta</span>
+          </button>
+          <button id="nav-stats-btn" onclick="window.navigateToView ? window.navigateToView('stats') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
+            <span>­ƒôè</span> <span class="sidebar-hide-on-collapse">Analisi & Statistiche</span>
+          </button>
+          <button id="nav-ppa-btn" onclick="window.navigateToView ? window.navigateToView('ppa') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
+            <span>­ƒñØ</span> <span class="sidebar-hide-on-collapse">Gestione PPA</span>
+          </button>
+          <button id="nav-settings-btn" onclick="window.navigateToView ? window.navigateToView('settings') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
+            <span>ÔÜÖ´©Å</span> <span class="sidebar-hide-on-collapse">Configurazione</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- Bottom Status Area -->
+      <div style="padding: 16px; border-top: 1px solid rgba(255,255,255,0.05); display: flex; flex-direction: column; gap: 6px;">
+        <div class="status-badge" style="display: flex; align-items: center; gap: 8px; background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.1); padding: 8px 12px; border-radius: 8px; justify-content: center;">
+          <div id="sync-status-indicator" class="status-indicator online" style="width: 6px; height: 6px; background-color: #4ade80; border-radius: 50%; box-shadow: 0 0 6px #4ade80; flex-shrink: 0;"></div>
+          <span id="sync-status-label" class="sidebar-hide-on-collapse" style="font-size: 0.65rem; font-weight: 600; color: var(--text-muted);">Sync Attivo</span>
+        </div>
+        <!-- Centralized Backend Queue Status Badge -->
+        <div id="queue-status-badge" class="status-badge" style="display: none; align-items: center; gap: 8px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); padding: 8px 12px; border-radius: 8px; justify-content: center; flex-direction: column; text-align: center; margin-top: 2px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="status-indicator syncing" style="width: 6px; height: 6px; background-color: #60a5fa; border-radius: 50%; box-shadow: 0 0 6px #60a5fa; flex-shrink: 0;"></div>
+            <span id="queue-status-title" class="sidebar-hide-on-collapse" style="font-size: 0.65rem; font-weight: 700; color: #60a5fa; text-transform: uppercase; letter-spacing: 0.05em;">Coda Server: 0</span>
+          </div>
+          <span id="queue-status-desc" class="sidebar-hide-on-collapse" style="font-size: 0.58rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">Caricamento...</span>
+        </div>
+        <div class="sidebar-hide-on-collapse" style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 2px;">
+          Build: <span style="font-weight: 600; color: #60a5fa;">v80</span>
+        </div>
+        <!-- Google User profile widget -->
+        <div id="user-profile-widget" style="display: none; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); text-align: left;">
+          <div id="user-avatar-container" style="position: relative; flex-shrink: 0;">
+            <img id="user-avatar-img" src="" alt="" style="width: 24px; height: 24px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.1); display: none;">
+            <div id="user-avatar-fallback" style="width: 24px; height: 24px; border-radius: 50%; background: linear-gradient(135deg, #10b981, #3b82f6); color: white; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.1);">US</div>
+          </div>
+          <div style="display: flex; flex-direction: column; overflow: hidden; flex-grow: 1;" class="sidebar-hide-on-collapse">
+            <span id="user-display-name" style="font-size: 0.65rem; font-weight: 700; color: var(--text-main); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;">Utente</span>
+            <button id="user-logout-btn" style="background: none; border: none; padding: 0; color: #f87171; font-size: 0.55rem; font-weight: 600; cursor: pointer; text-align: left; display: flex; align-items: center; gap: 4px; margin-top: 1px;">
+              ­ƒÜ¬ Esci
+            </button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ==========================================
+         MAIN CONTENT WRAPPER (RIGHT AREA)
+         ========================================== -->
+    <div id="main-wrapper" style="display: flex; flex-direction: column; flex-grow: 1; overflow: hidden; height: 100%;">
+      
+      <!-- ==========================================
+           TOP BAR: GLOBAL DATA FILTERS
+           ========================================== -->
+      <header class="main-header" style="min-height: 48px; border-bottom: 1px solid var(--panel-border); background: #0c101b; display: flex; align-items: center; padding: 6px 24px; z-index: 110; box-shadow: 0 2px 10px rgba(0,0,0,0.1); backdrop-filter: blur(8px);">
+        <div style="width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 24px; justify-content: flex-start;">
+          
+          <!-- Group 1: Time Horizon -->
+          <div style="display: flex; align-items: center; gap: 12px; border-right: 1px solid rgba(255, 255, 255, 0.08); padding-right: 20px;">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 0.55rem; font-weight: 700; color: #60a5fa; opacity: 0.85; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px;">­ƒôà Orizzonte Temporale</span>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <select id="timeline-duration-select" class="custom-select" style="width: auto; padding: 4px 8px; font-size: 0.72rem; height: 26px; border-radius: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--panel-border); color: var(--text-main);">
+                  <option value="7">1 Settimana</option>
+                  <option value="15">15 Giorni</option>
+                  <option value="30" selected>1 Mese</option>
+                  <option value="60">2 Mesi</option>
+                  <option value="90">3 Mesi</option>
+                </select>
+                <div style="display: none;">
+                  <input type="range" id="timeline-range-slider" class="timeline-slider" min="0" max="75" value="75" style="width: 100%; margin: 0;">
+                </div>
+                <input type="date" id="timeline-date-picker" class="custom-select" style="width: auto; padding: 2px 6px; font-size: 0.72rem; height: 26px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; border-radius: 6px; font-family: var(--font-mono); font-weight: 600; cursor: pointer;">
+              </div>
+            </div>
+          </div>
+
+          <!-- Group 2: Tech & Partner -->
+          <div style="display: flex; align-items: center; gap: 12px; border-right: 1px solid rgba(255, 255, 255, 0.08); padding-right: 20px; height: 36px;">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 0.55rem; font-weight: 700; color: #60a5fa; opacity: 0.85; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px;">­ƒöî Tecnologia & PPA</span>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="display: flex; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 6px; padding: 2px; height: 26px; align-items: center;">
+                  <button id="tech-btn-wind" class="segmented-btn active" style="padding: 2px 8px; font-size: 0.68rem; border-radius: 4px; border: none; background: rgba(59, 130, 246, 0.15); color: var(--text-main); font-weight: 600; cursor: pointer; transition: all 0.2s;">­ƒÆ¿ Wind</button>
+                  <button id="tech-btn-solar" class="segmented-btn active" style="padding: 2px 8px; font-size: 0.68rem; border-radius: 4px; border: none; background: rgba(251, 191, 36, 0.15); color: var(--text-main); font-weight: 600; cursor: pointer; transition: all 0.2s;">ÔÿÇ´©Å Solar</button>
+                </div>
+                
+                <!-- Hidden Region Filter for JS compatibility -->
+                <select id="filter-region" style="display: none;">
+                  <option value="All">All</option>
+                </select>
+
+                <select id="filter-ppa" class="custom-select" style="padding: 4px 8px; font-size: 0.72rem; height: 26px; border-radius: 6px; background: rgba(0,0,0,0.2); border: 1px solid var(--panel-border); color: var(--text-main); font-weight: 600; min-width: 140px; cursor: pointer;">
+                  <option value="All">Tutti i Partner PPA</option>
+                  <option value="None">Non Assegnate</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <!-- Group 3: Anomaly States -->
+          <div style="display: flex; align-items: center; gap: 12px; border-right: 1px solid rgba(255, 255, 255, 0.08); padding-right: 20px; height: 36px;">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 0.55rem; font-weight: 700; color: #60a5fa; opacity: 0.85; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px;">ÔÜá´©Å Filtro Anomalie</span>
+              <div style="display: flex; align-items: center; gap: 6px;">
+                
+                <label class="toggle-pill pill-red" style="cursor: pointer; display: inline-flex; align-items: center; padding: 2px 8px; height: 24px; font-size: 0.68rem; border-radius: 12px; border: 1px solid rgba(239, 68, 68, 0.25); background: rgba(239, 68, 68, 0.04); color: #f87171; font-weight: 600; user-select: none; transition: all 0.15s;">
+                  <input type="checkbox" id="filter-gaps" style="display: none;">
+                  <span>­ƒö┤ Gap</span>
+                </label>
+                
+                <label class="toggle-pill pill-orange" style="cursor: pointer; display: inline-flex; align-items: center; padding: 2px 8px; height: 24px; font-size: 0.68rem; border-radius: 12px; border: 1px solid rgba(251, 191, 36, 0.25); background: rgba(251, 191, 36, 0.04); color: #fbbf24; font-weight: 600; user-select: none; transition: all 0.15s;">
+                  <input type="checkbox" id="filter-discrepancies" style="display: none;">
+                  <span>­ƒƒí Discrepanze</span>
+                </label>
+                
+              </div>
+            </div>
+          </div>
+
+          <!-- Group 4: Selective UP Multi-filter -->
+          <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1;">
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <span style="font-size: 0.55rem; font-weight: 700; color: #60a5fa; opacity: 0.85; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px;">­ƒöì Filtro Unit├á (UP)</span>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <select id="search-up-select" class="custom-select" style="padding: 4px 8px; font-size: 0.72rem; height: 26px; border-radius: 6px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.25); color: #60a5fa; font-weight: 600; width: 130px; cursor: pointer;">
+                  <option value="">+ Aggiungi UP...</option>
+                </select>
+                <div id="selected-ups-tags" style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;"></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </header>
+
+      <!-- Hidden native filter inputs to maintain JS compatibility -->
+      <input type="checkbox" id="filter-wind" checked style="display: none;">
+      <input type="checkbox" id="filter-solar" checked style="display: none;">
+
+      <!-- ==========================================
+           MAIN PANEL
+           ========================================== -->
+      <main style="flex-grow: 1; display: flex; flex-direction: column; overflow: auto; min-height: 0; padding: 24px;">
+
+      <!-- VIEW 1: FLEET HEATMAP (LEVEL 1) -->
+      <section id="fleet-heatmap-view" class="view-panel">
+        <div class="view-title-bar" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+          <div style="display: flex; align-items: center; gap: 16px;">
+            <h2 style="margin: 0;">Integrit├á Flotta</h2>
+            <button id="sync-yesterday-btn" class="icon-btn" style="font-size: 0.72rem; padding: 6px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.25); color: #10b981; border-radius: 8px; font-weight: 600; transition: all 0.2s;">
+              ­ƒöä Aggiorna Ieri (D-1)
+            </button>
+          </div>
+          <div class="heatmap-legend">
+            <div class="legend-item">
+              <div class="legend-color green"></div>
+              <span>100% Telemetrie</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color red"></div>
+              <span>Buchi non giustificati</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color grey"></div>
+              <span>Manutenzione (Outage)</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color orange"></div>
+              <span>Disallineamento parziale</span>
+            </div>
+          </div>
+        </div>
+
+
+
+        <div class="heatmap-canvas-container">
+          <canvas id="heatmap-canvas"></canvas>
+        </div>
+
+      </section>
+
+      <!-- VIEW 1.5: FLEET ANALYTICS & STATS (LEVEL 1.5) -->
+      <section id="fleet-stats-view" class="view-panel hidden" style="padding: 24px 24px 0 24px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden;">
+        <div class="view-title-bar" style="margin-bottom: 12px; border-bottom: 1px solid var(--panel-border); padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;">
+          <h2 style="margin: 0; font-size: 1.4rem; background: linear-gradient(135deg, #60a5fa 0%, #a855f7 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">­ƒôè Dashboard Analisi & Statistiche</h2>
+          <span style="font-size: 0.75rem; color: var(--text-muted); font-style: italic;">Calcolate dinamicamente sui filtri e intervallo temporale attivi</span>
+        </div>
+
+        <!-- Subtabs Navigation -->
+        <nav class="stats-subtabs" style="display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--panel-border); padding-bottom: 8px; flex-shrink: 0;">
+          <button id="stats-tab-qualita" class="stats-subtab-btn active">­ƒôè Qualit├á Dati & KPI</button>
+          <button id="stats-tab-processi" class="stats-subtab-btn">ÔÜí Fattibilit├á Processi (SCADA/METER)</button>
+        </nav>
+
+        <!-- SUBPANEL 1: QUALIT├Ç DATI & KPI -->
+        <div id="stats-panel-qualita" class="stats-subpanel" style="flex-grow: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;">
+          <!-- KPI Cards Row -->
+          <div class="stats-kpi-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; flex-shrink: 0;">
+            
+            <div class="app-card kpi-card" data-tooltip="Percentuale media di campionamenti validi (96 al giorno) letti per i flussi METER e SCADA (se abilitato)." style="padding: 16px 20px; display: flex; align-items: center; gap: 16px; background: rgba(59, 130, 246, 0.04); border-left: 4px solid #60a5fa; border-radius: 8px; border-top: 1px solid var(--panel-border); border-right: 1px solid var(--panel-border); border-bottom: 1px solid var(--panel-border);">
+              <div style="font-size: 2rem;">­ƒôê</div>
+              <div>
+                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Completezza Media</div>
+                <div id="kpi-completeness" style="font-size: 1.6rem; font-weight: 800; color: #60a5fa; font-family: var(--font-mono);">--%</div>
+              </div>
+            </div>
+
+            <div class="app-card kpi-card" data-tooltip="Numero cumulativo di giorni nello stato Rosso (Incompleto): mancano dati di telemetria senza alcuna outage segnalata." style="padding: 16px 20px; display: flex; align-items: center; gap: 16px; background: rgba(248, 113, 113, 0.04); border-left: 4px solid #f87171; border-radius: 8px; border-top: 1px solid var(--panel-border); border-right: 1px solid var(--panel-border); border-bottom: 1px solid var(--panel-border);">
+              <div style="font-size: 2rem;">­ƒøæ</div>
+              <div>
+                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Giorni con Gap (Critici)</div>
+                <div id="kpi-gaps" style="font-size: 1.6rem; font-weight: 800; color: #f87171; font-family: var(--font-mono);">--</div>
+              </div>
+            </div>
+
+            <div class="app-card kpi-card" data-tooltip="Numero cumulativo di giorni nello stato Arancione (Discrepanza): rilevato un disallineamento significativo tra misure SCADA e METER." style="padding: 16px 20px; display: flex; align-items: center; gap: 16px; background: rgba(251, 191, 36, 0.04); border-left: 4px solid #fbbf24; border-radius: 8px; border-top: 1px solid var(--panel-border); border-right: 1px solid var(--panel-border); border-bottom: 1px solid var(--panel-border);">
+              <div style="font-size: 2rem;">ÔÜá´©Å</div>
+              <div>
+                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Discrepanze Rilevate</div>
+                <div id="kpi-discrepancies" style="font-size: 1.6rem; font-weight: 800; color: #fbbf24; font-family: var(--font-mono);">--</div>
+              </div>
+            </div>
+
+            <div class="app-card kpi-card" data-tooltip="Numero cumulativo di giorni nello stato Grigio (Outage): assenza di misure coperta da un fermo macchina valido e registrato." style="padding: 16px 20px; display: flex; align-items: center; gap: 16px; background: rgba(156, 163, 175, 0.04); border-left: 4px solid #9ca3af; border-radius: 8px; border-top: 1px solid var(--panel-border); border-right: 1px solid var(--panel-border); border-bottom: 1px solid var(--panel-border);">
+              <div style="font-size: 2rem;">­ƒöº</div>
+              <div>
+                <div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em;">Giorni in Outage</div>
+                <div id="kpi-outages" style="font-size: 1.6rem; font-weight: 800; color: #9ca3af; font-family: var(--font-mono);">--</div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Segmented Control for charts grouping -->
+          <div style="display: flex; justify-content: center; margin-top: 4px; margin-bottom: 4px; flex-shrink: 0;">
+            <div class="segmented-control" style="display: flex; background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); border-radius: 20px; padding: 2px;">
+              <button id="charts-group-1-btn" class="segmented-btn active">­ƒôê Qualit├á Temporale & Criticit├á</button>
+              <button id="charts-group-2-btn" class="segmented-btn">­ƒì® Analisi Tecnologie & Regioni</button>
+            </div>
+          </div>
+
+          <!-- GROUP 1: Trend & Worst Performers -->
+          <div id="charts-group-1" class="stats-charts-grid" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; flex-grow: 1; min-height: 0;">
+            <!-- Card 1: Stacked Area Trend -->
+            <div class="app-card" style="padding: 16px 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; justify-content: space-between;">
+              <div style="margin-bottom: 8px; border-bottom: 1px solid var(--panel-border); padding-bottom: 6px;">
+                <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">­ƒôê Trend Integrit├á Temporale</h3>
+              </div>
+              <div style="position: relative; height: 230px; width: 100%;">
+                <canvas id="trend-chart-canvas"></canvas>
+              </div>
+              <div style="display: flex; justify-content: center; gap: 12px; font-size: 0.65rem; margin-top: 8px; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background-color: #4ade80; border-radius: 2px;"></div><span>Green (Ok)</span></div>
+                <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background-color: #f87171; border-radius: 2px;"></div><span>Red (Gap)</span></div>
+                <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background-color: #fbbf24; border-radius: 2px;"></div><span>Orange (Discrepanza)</span></div>
+                <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background-color: #9ca3af; border-radius: 2px;"></div><span>Grey (Outages)</span></div>
+              </div>
+            </div>
+
+            <!-- Card 2: Worst 5 Performers (Bar Chart) -->
+            <div class="app-card" style="padding: 16px 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; justify-content: space-between;">
+              <div style="margin-bottom: 8px; border-bottom: 1px solid var(--panel-border); padding-bottom: 6px;">
+                <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">­ƒÅå Top 5 Unit├á Critiche (Giorni con Anomalie)</h3>
+              </div>
+              <div style="position: relative; height: 230px; width: 100%;">
+                <canvas id="worst-performers-chart-canvas"></canvas>
+              </div>
+              <div style="display: flex; justify-content: center; gap: 12px; font-size: 0.65rem; margin-top: 8px; flex-wrap: wrap;">
+                <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background-color: #f87171; border-radius: 2px;"></div><span>Giorni Incompleti (Red)</span></div>
+                <div style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background-color: #fbbf24; border-radius: 2px;"></div><span>Discrepanze (Orange)</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- GROUP 2: Technology Donuts & Regional Quality -->
+          <div id="charts-group-2" class="stats-charts-grid hidden" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; flex-grow: 1; min-height: 0;">
+            <!-- Card 3: Donut Tech -->
+            <div class="app-card" style="padding: 16px 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; justify-content: space-between;">
+              <div style="margin-bottom: 8px; border-bottom: 1px solid var(--panel-border); padding-bottom: 6px;">
+                <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">­ƒì® Distribuzione Stati per Tecnologia</h3>
+              </div>
+              <div style="position: relative; height: 160px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 20px; flex-grow: 1;">
+                <div style="width: 50%; height: 100%; position: relative;">
+                  <div style="text-align: center; font-size: 0.65rem; font-weight: 700; color: #60a5fa; margin-bottom: 2px;">WIND (EOLICO)</div>
+                  <canvas id="donut-wind-canvas"></canvas>
+                </div>
+                <div style="width: 50%; height: 100%; position: relative;">
+                  <div style="text-align: center; font-size: 0.65rem; font-weight: 700; color: #fbbf24; margin-bottom: 2px;">SOLAR (FOTOVOLTAICO)</div>
+                  <canvas id="donut-solar-canvas"></canvas>
+                </div>
+              </div>
+              <!-- Technology summary stats table -->
+              <div style="display: flex; gap: 16px; justify-content: space-around; font-size: 0.62rem; color: var(--text-muted); border-top: 1px solid var(--panel-border); padding-top: 8px; margin-top: 4px; flex-shrink: 0; min-height: 54px;">
+                <div id="donut-wind-stats" style="width: 48%;">
+                  <!-- Filled dynamically -->
+                </div>
+                <div id="donut-solar-stats" style="width: 48%; border-left: 1px solid var(--panel-border); padding-left: 8px;">
+                  <!-- Filled dynamically -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Card 4: Regional Horizontal Bars -->
+            <div class="app-card" style="padding: 16px 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; justify-content: space-between;">
+              <div style="margin-bottom: 8px; border-bottom: 1px solid var(--panel-border); padding-bottom: 6px;">
+                <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0;">­ƒù║´©Å Qualit├á Dati per Area Geografica</h3>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1; min-height: 0;">
+                <!-- Left: Chart Canvas -->
+                <div style="position: relative; height: 180px; width: 60%; flex-shrink: 0;">
+                  <canvas id="regional-chart-canvas"></canvas>
+                </div>
+                <!-- Right: Summary Table -->
+                <div style="flex-grow: 1; min-height: 0; max-height: 180px; overflow-y: auto; border-left: 1px solid var(--panel-border); padding-left: 12px;">
+                  <table style="width: 100%; border-collapse: collapse; font-size: 0.62rem; text-align: left;">
+                    <thead>
+                      <tr style="border-bottom: 1px solid var(--panel-border); color: var(--text-muted);">
+                        <th style="padding: 2px 4px;">Zona</th>
+                        <th style="padding: 2px 4px; text-align: center;">UP</th>
+                        <th style="padding: 2px 4px; text-align: right;">Qualit├á</th>
+                      </tr>
+                    </thead>
+                    <tbody id="regional-table-tbody" style="color: var(--text-main);">
+                      <!-- Filled dynamically -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div style="text-align: center; font-size: 0.6rem; color: var(--text-muted); margin-top: 6px; border-top: 1px solid var(--panel-border); padding-top: 4px; flex-shrink: 0;">
+                Percentuale di completezza misure per zona di dispacciamento
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SUBPANEL 2: FATTIBILIT├Ç PROCESSI -->
+        <div id="stats-panel-processi" class="stats-subpanel hidden" style="flex-grow: 1; min-height: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; padding-bottom: 24px;">
+          
+          <!-- SCADA Forecast Gauge Card -->
+          <div class="app-card kpi-card" data-tooltip="Correzione Previsioni: % di giorni della finestra con dati SCADA completi al 100% (esclusi SCADA disabilitati)." style="padding: 16px 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 10px; height: 100%; justify-content: space-between;">
+            <div>
+              <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0; border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; width: 100%;">­ƒö« Correzione Previsioni (SCADA)</h3>
+              
+              <!-- Quick Stats Row -->
+              <div style="display: flex; gap: 16px; font-size: 0.68rem; color: var(--text-muted); padding-top: 6px; padding-bottom: 2px;">
+                <div><strong>UP SCADA Attive:</strong> <span id="scada-stats-monitored" style="color:var(--text-main); font-weight: 600;">--</span></div>
+                <div><strong>Giorni-UP bloccati:</strong> <span id="scada-stats-blocked" style="color:#f87171; font-weight: 600;">--</span></div>
+              </div>
+            </div>
+            
+            <div style="display: flex; align-items: center; gap: 20px; flex-grow: 1; min-height: 0;">
+              <!-- Left: Canvas -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0; width: 130px;">
+                <div style="position: relative; width: 130px; height: 130px;">
+                  <canvas id="feasibility-scada-canvas" width="130" height="130" style="width:130px; height:130px;"></canvas>
+                </div>
+                <div style="font-size: 0.62rem; color: var(--text-muted); text-align: center; margin-top: 4px; line-height: 1.2;">Previsioni RT (SCADA)</div>
+              </div>
+              
+              <!-- Right: Blockers -->
+              <div style="flex-grow: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px;">
+                <h4 style="font-size: 0.72rem; font-weight: 700; color: #ef4444; margin: 0; text-transform: uppercase; display: flex; align-items: center; gap: 6px;">­ƒÜ½ Unit├á Bloccanti (Gaps SCADA)</h4>
+                <div id="scada-blockers-list" style="display: flex; flex-direction: column; gap: 6px;">
+                  <!-- Filled dynamically by ui.js -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Bottom: Sparkline -->
+            <div style="border-top: 1px solid var(--panel-border); padding-top: 8px; margin-top: 2px; display: flex; flex-direction: column; gap: 4px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 0.68rem; font-weight: 700; color: var(--text-main);">­ƒôê Trend Storico di Fattibilit├á</span>
+                <span style="font-size: 0.6rem; color: var(--text-muted);">% UP senza gap per giorno</span>
+              </div>
+              <div style="position: relative; height: 70px; width: 100%;">
+                <canvas id="feasibility-scada-sparkline" style="height: 70px; width: 100%;"></canvas>
+              </div>
+            </div>
+          </div>
+          
+          <!-- METER Settlement Gauge Card -->
+          <div class="app-card kpi-card" data-tooltip="Chiusura Consuntivo: % di giorni della finestra con dati METER completi al 100% per tutte le unit├á." style="padding: 16px 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 10px; height: 100%; justify-content: space-between;">
+            <div>
+              <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0; border-bottom: 1px solid var(--panel-border); padding-bottom: 6px; width: 100%;">­ƒÆ░ Fattibilit├á Consuntivo (METER)</h3>
+              
+              <!-- Quick Stats Row -->
+              <div style="display: flex; gap: 16px; font-size: 0.68rem; color: var(--text-muted); padding-top: 6px; padding-bottom: 2px;">
+                <div><strong>UP Monitorate:</strong> <span id="meter-stats-monitored" style="color:var(--text-main); font-weight: 600;">--</span></div>
+                <div><strong>Giorni-UP bloccati:</strong> <span id="meter-stats-blocked" style="color:#fbbf24; font-weight: 600;">--</span></div>
+              </div>
+            </div>
+            
+            <div style="display: flex; align-items: center; gap: 20px; flex-grow: 1; min-height: 0;">
+              <!-- Left: Canvas -->
+              <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; flex-shrink: 0; width: 130px;">
+                <div style="position: relative; width: 130px; height: 130px;">
+                  <canvas id="feasibility-meter-canvas" width="130" height="130" style="width:130px; height:130px;"></canvas>
+                </div>
+                <div style="font-size: 0.62rem; color: var(--text-muted); text-align: center; margin-top: 4px; line-height: 1.2;">Consuntivazione (METER)</div>
+              </div>
+              
+              <!-- Right: Blockers -->
+              <div style="flex-grow: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px;">
+                <h4 style="font-size: 0.72rem; font-weight: 700; color: #fbbf24; margin: 0; text-transform: uppercase; display: flex; align-items: center; gap: 6px;">­ƒÜ½ Unit├á Bloccanti (Gaps METER)</h4>
+                <div id="meter-blockers-list" style="display: flex; flex-direction: column; gap: 6px;">
+                  <!-- Filled dynamically by ui.js -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Bottom: Sparkline -->
+            <div style="border-top: 1px solid var(--panel-border); padding-top: 8px; margin-top: 2px; display: flex; flex-direction: column; gap: 4px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 0.68rem; font-weight: 700; color: var(--text-main);">­ƒôê Trend Storico di Fattibilit├á</span>
+                <span style="font-size: 0.6rem; color: var(--text-muted);">% UP senza gap per giorno</span>
+              </div>
+              <div style="position: relative; height: 70px; width: 100%;">
+                <canvas id="feasibility-meter-sparkline" style="height: 70px; width: 100%;"></canvas>
+              </div>
+            </div>
+          </div>
+
+      </section>
+
+      <!-- VIEW 2: DETAIL DEEP DIVE (LEVEL 2 & 3) -->
+      <section id="detail-deepdive-view" class="view-panel hidden">
+        <div class="detail-nav-header">
+          <div class="up-meta-info">
+            <h2 id="detail-up-title">Parco Eolico Troina (UP_WIND_04)</h2>
+            <div>
+              <span><strong>Tecnologia:</strong> <span id="detail-up-tech" style="color:#60a5fa">Wind</span></span>
+              <span><strong>Regione:</strong> <span id="detail-up-region" style="color:#60a5fa">Sicilia</span></span>
+              <span><strong>Nominale:</strong> <span id="detail-up-capacity" style="color:#60a5fa">45 MW</span></span>
+            </div>
+            <label style="display: flex; align-items: center; gap: 6px; font-size: 0.8rem; margin-top: 6px; color: var(--text-muted); cursor: pointer; user-select: none;">
+              <input type="checkbox" id="detail-up-noscada-cb" style="cursor: pointer;">
+              Non Censita in SCADA
+            </label>
+          </div>
+          <div class="detail-actions" style="display: flex; align-items: center; gap: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="font-size: 0.75rem; color: var(--text-muted); white-space: nowrap;">Giorno Selezionato:</span>
+              <input type="date" id="detail-date-picker" class="custom-select" style="width: auto; padding: 4px 8px; font-size: 0.8rem; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; border-radius: 6px; font-family: var(--font-mono); font-weight: 600; cursor: pointer;">
+            </div>
+            <button id="detail-back-btn" class="icon-btn">
+              Ô¼à´©Å Torna alla Flotta
+            </button>
+          </div>
+        </div>
+
+        <!-- API Error banner if present for selected day -->
+        <div id="detail-api-error-banner" style="display: none; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25); border-left: 4px solid #ef4444; padding: 12px 16px; border-radius: 8px; color: #fecaca; margin-bottom: 16px; font-size: 0.8rem; align-items: center; gap: 10px;">
+          <span style="font-size: 1rem;">ÔÜá´©Å</span>
+          <div style="flex-grow: 1;">
+            <strong>Errore Acquisizione API per questa giornata:</strong>
+            <span id="detail-api-error-message" style="margin-left: 4px; font-family: var(--font-mono); color: #fca5a5; user-select: text;">--</span>
+          </div>
+        </div>
+
+        <!-- Level 2: Barcodes Ribbons (3 Days Window) -->
+        <div class="ribbons-container" id="detail-ribbons-container">
+          <!-- Rendered dynamically by ui.js -->
+        </div>
+
+        <!-- Level 3: Production Curves & Ceiling Cap Shadow -->
+        <div class="chart-container-block">
+          <div class="view-title-bar" style="margin-bottom: 0;">
+            <h3>Profilo di Produzione & Coerenza Outage</h3>
+            <span class="timeline-value-badge" id="chart-date-label">2026-05-10</span>
+          </div>
+          <div class="chart-canvas-wrapper">
+            <canvas id="profile-chart-canvas"></canvas>
+          </div>
+        </div>
+
+        <!-- Tabular Values Grid -->
+        <div class="table-container-block" style="margin-top: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; padding: 20px; box-shadow: var(--shadow-lg);">
+          <div class="view-title-bar" style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+            <h3 style="margin: 0; font-size: 1rem;">Valori Tabellari delle Misure</h3>
+            <button id="export-table-btn" class="icon-btn" style="font-size: 0.75rem; padding: 6px 12px; cursor: pointer;">
+              ­ƒôÑ Esporta CSV
+            </button>
+          </div>
+          <div style="max-height: 300px; overflow-y: auto; border: 1px solid var(--panel-border); border-radius: 8px;">
+            <table id="detail-values-table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.8rem;">
+              <thead style="position: sticky; top: 0; background: var(--input-bg); border-bottom: 2px solid var(--panel-border); z-index: 10;">
+                <tr>
+                  <th style="padding: 10px; color: var(--text-muted);">Ora (UTC)</th>
+                  <th style="padding: 10px; color: #3b82f6;">Meter (MW)</th>
+                  <th style="padding: 10px; color: #10b981;">SCADA (MW)</th>
+                  <th style="padding: 10px; color: #8b5cf6;">Tetto Outage (MW)</th>
+                  <th style="padding: 10px; color: var(--text-muted);">Stato</th>
+                </tr>
+              </thead>
+              <tbody id="detail-values-tbody" style="color: var(--text-main);">
+                <!-- Populated dynamically by ui.js -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 5: GESTIONE PPA & TAGS -->
+      <section id="ppa-view" class="view-panel hidden" style="padding: 24px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; gap: 20px;">
+        <div class="view-title-bar" style="margin-bottom: 0;">
+          <h2>Gestione Assegnazioni PPA (Partner Trade)</h2>
+        </div>
+
+        <div style="display: flex; gap: 20px; flex-grow: 1; min-height: 0; width: 100%;">
+          
+          <!-- Left: Tag & Partner Manager -->
+          <div class="app-card" style="width: 320px; padding: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 15px; flex-shrink: 0;">
+            <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0; border-bottom: 1px solid var(--panel-border); padding-bottom: 8px;">­ƒñØ Partner / TAGs PPA</h3>
+            
+            <!-- Create Tag Form -->
+            <div style="background: rgba(255,255,255,0.02); border: 1px solid var(--panel-border); padding: 12px; border-radius: 8px; display: flex; flex-direction: column; gap: 8px;">
+              <div style="font-weight: 700; font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase;">Crea Nuovo Partner</div>
+              <input type="text" id="ppa-new-tag-name" placeholder="Nome Partner / Tag" style="width: 100%; padding: 6px 10px; font-size: 0.75rem; background: rgba(0,0,0,0.2); border: 1px solid var(--panel-border); border-radius: 6px; color: var(--text-main); outline: none;">
+              
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                <span style="font-size: 0.68rem; color: var(--text-muted);">Colore Badge:</span>
+                <input type="color" id="ppa-new-tag-color" value="#3b82f6" style="width: 40px; height: 24px; border: none; border-radius: 4px; cursor: pointer; background: none; padding: 0;">
+              </div>
+              
+              <button id="ppa-create-tag-btn" class="btn btn-primary" style="padding: 6px; font-size: 0.72rem; cursor: pointer; border-radius: 6px; width: 100%; font-weight: 600; background: #3b82f6; color: white; border: none; transition: background 0.2s;">
+                Ô×ò Aggiungi Partner
+              </button>
+            </div>
+
+            <!-- Tags List -->
+            <div style="flex-grow: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px;">
+              <div style="font-weight: 700; font-size: 0.72rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px;">Elenco Partner Definiti</div>
+              <div id="ppa-tags-list" style="overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;">
+                <!-- Populated dynamically -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: UP Registry & Assignment Grid -->
+          <div class="app-card" style="flex-grow: 1; padding: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; gap: 15px; min-height: 0;">
+            <h3 style="font-size: 0.85rem; font-weight: 600; color: var(--text-main); text-transform: uppercase; letter-spacing: 0.05em; margin: 0; border-bottom: 1px solid var(--panel-border); padding-bottom: 8px;">­ƒôï Assegnazione Unit├á di Produzione</h3>
+            
+            <!-- Filters & Batch Action Bar -->
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; background: rgba(255,255,255,0.01); border: 1px solid var(--panel-border); padding: 10px 12px; border-radius: 8px; font-size: 0.72rem;">
+              
+              <!-- Search & Filters -->
+              <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1;">
+                <input type="text" id="ppa-up-search" placeholder="Cerca per Nome, ID o Tag..." style="max-width: 240px; padding: 6px 10px; background: rgba(0,0,0,0.2); border: 1px solid var(--panel-border); border-radius: 6px; color: var(--text-main); outline: none;">
+                
+                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;">
+                  <input type="checkbox" id="ppa-filter-unassigned" style="cursor: pointer;">
+                  Solo non assegnate
+                </label>
+              </div>
+
+              <!-- Batch Actions -->
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="color: var(--text-muted);">Assegna selezionate a:</span>
+                <select id="ppa-batch-tag-select" class="custom-select" style="padding: 4px 8px; font-size: 0.72rem; border-radius: 6px; background: rgba(0,0,0,0.3); border: 1px solid var(--panel-border); color: var(--text-main); font-weight: 600;">
+                  <option value="">-- Seleziona Partner --</option>
+                </select>
+                
+                <button id="ppa-apply-assignment-btn" class="btn btn-primary" style="padding: 6px 12px; font-weight: 600; font-size: 0.72rem; border-radius: 6px; background: #10b981; border: none; color: white; cursor: pointer;">
+                  Assegna
+                </button>
+                
+                <button id="ppa-clear-assignment-btn" class="btn btn-secondary" style="padding: 6px 12px; font-weight: 600; font-size: 0.72rem; border-radius: 6px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); color: #f87171; cursor: pointer;">
+                  Rimuovi Assegnazione
+                </button>
+              </div>
+            </div>
+
+            <!-- UP Table Container -->
+            <div style="flex-grow: 1; overflow-y: auto; border: 1px solid var(--panel-border); border-radius: 8px;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.72rem;">
+                <thead>
+                  <tr style="background: rgba(22, 29, 47, 0.6); border-bottom: 1px solid var(--panel-border); position: sticky; top: 0; z-index: 10;">
+                    <th style="padding: 8px 12px; width: 40px; text-align: center;">
+                      <input type="checkbox" id="ppa-select-all-ups" style="cursor: pointer;">
+                    </th>
+                    <th style="padding: 8px 12px; width: 120px;">Codice UP</th>
+                    <th style="padding: 8px 12px;">Nome Unit├á</th>
+                    <th style="padding: 8px 12px; width: 100px;">Tecnologia</th>
+                    <th style="padding: 8px 12px; width: 120px;">Regione</th>
+                    <th style="padding: 8px 12px; width: 180px;">Partner PPA Assegnato</th>
+                  </tr>
+                </thead>
+                <tbody id="ppa-up-table-tbody">
+                  <!-- Populated dynamically -->
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Selection Count Footer -->
+            <div style="font-size: 0.68rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+              <span id="ppa-selection-status">Selezionate: 0 / 100 UP</span>
+              <span>Le modifiche vengono salvate automaticamente nella configurazione.</span>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- VIEW 3: ARCHIVE CONFIGURATION / SETTINGS -->
+      <section id="settings-view" class="view-panel hidden">
+        <div class="view-title-bar">
+          <h2>Configurazione</h2>
+        </div>
+        
+        <div class="settings-grid">
+          
+          <!-- Card 1: Connection & API configuration -->
+          <div class="settings-card">
+            <h3>­ƒöî Connessione Azure Gateway</h3>
+            <p>Configura l'accesso all'API Gateway ufficiale Azure. L'applicazione esegue tutte le chiamate client-side.</p>
+            
+            <div class="settings-row">
+              <div class="checkbox-card" style="margin-top: 10px;">
+                <input type="checkbox" id="api-simulation-cb" checked>
+                <div>
+                  <span class="checkbox-label">Modalit├á Simulazione (Simulated Mode)</span>
+                  <span class="checkbox-desc">Simula risposte API realistiche offline con anomalie e outages.</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-row">
+              <label for="api-tenant-input" style="font-size:0.75rem; font-weight:600; color:var(--text-muted);">Azure AD Tenant ID</label>
+              <input type="text" id="api-tenant-input" class="custom-select" placeholder="Inserisci Tenant ID...">
+            </div>
+            
+            <div class="settings-row">
+              <label for="api-client-input" style="font-size:0.75rem; font-weight:600; color:var(--text-muted);">Application (Client) ID</label>
+              <input type="text" id="api-client-input" class="custom-select" placeholder="Inserisci Client ID...">
+            </div>
+
+            <div class="settings-row">
+              <label for="api-secret-input" style="font-size:0.75rem; font-weight:600; color:var(--text-muted);">Client Secret (Password)</label>
+              <input type="password" id="api-secret-input" class="custom-select" placeholder="Inserisci Client Secret...">
+            </div>
+
+            <div class="settings-row">
+              <label for="api-scope-input" style="font-size:0.75rem; font-weight:600; color:var(--text-muted);">Scope / Audience</label>
+              <input type="text" id="api-scope-input" class="custom-select" placeholder="Inserisci Scope (es: api://.../.default)...">
+            </div>
+
+            <div class="settings-row">
+              <button id="acquire-token-btn" class="btn btn-primary" style="font-size: 0.8rem; padding: 6px 12px; margin-top: 4px;">
+                ­ƒöæ Acquisisci Token Azure AD
+              </button>
+            </div>
+
+            <div class="settings-row">
+              <label for="api-token-input" style="font-size:0.72rem; font-weight:600; color:var(--text-muted);">BEARER TOKEN ATTIVO (AUTO-GENERATO)</label>
+              <input type="password" id="api-token-input" class="custom-select" placeholder="Token non acquisito." disabled>
+            </div>
+          </div>
+
+          <!-- Card 2: Database & Service Worker Management -->
+          <div class="settings-card">
+            <h3>­ƒÆ¥ Gestione Archivio & Service Worker</h3>
+            <p>Manutenzione dell'archivio IndexedDB e del Service Worker locale del browser. Forza la disinstallazione in caso di cache appesa.</p>
+            
+            <div class="settings-row">
+              <label for="retention-policy-select" style="font-size:0.75rem; font-weight:600; color:var(--text-muted);">RETENTION POLICY (WIPE AUTOMATICO)</label>
+              <select id="retention-policy-select" class="custom-select">
+                <option value="1">Conserva 1 Mese</option>
+                <option value="2">Conserva 2 Mesi</option>
+                <option value="3" selected>Conserva 3 Mesi</option>
+              </select>
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-top: auto; flex-direction: column;">
+              <button id="clear-db-btn" class="btn btn-danger" style="font-size: 0.8rem; padding: 10px 14px; width: 100%;">
+                ­ƒùæ´©Å Svuota Archivio Locale (IndexedDB)
+              </button>
+              <button id="unregister-sw-btn" class="btn btn-secondary" style="font-size: 0.8rem; padding: 8px 12px; background: rgba(239, 68, 68, 0.08); border: 1px dashed rgba(239, 68, 68, 0.4); color: var(--accent-red); cursor: pointer; border-radius: 6px; transition: all 0.2s; width: 100%;">
+                ÔÜÖ´©Å Forza Disinstallazione Service Workers
+              </button>
+            </div>
+          </div>
+
+          <!-- Card 3: Mass Sync Queue Trigger -->
+          <div class="settings-card" style="grid-column: span 1;">
+            <h3>­ƒöä Iniezione Storica Massiva</h3>
+            <p>Richiede lo scaricamento massivo della telemetria storica. Il processo viene eseguito dal Service Worker in background nel thread separato.</p>
+            
+            <div class="settings-row">
+              <label for="sync-days-select" style="font-size:0.75rem; font-weight:600; color:var(--text-muted);">FINESTRA STORICA DA SCARICARE</label>
+              <select id="sync-days-select" class="custom-select">
+                <option value="1">Ultimo Giorno</option>
+                <option value="3">Ultimi 3 Giorni</option>
+                <option value="7">Ultimi 7 Giorni (Consigliato per demo)</option>
+                <option value="15">Ultimi 15 Giorni</option>
+                <option value="30" selected>Ultimi 30 Giorni</option>
+              </select>
+            </div>
+
+            <div class="settings-row">
+              <label for="sync-up-select" style="font-size:0.75rem; font-weight:600; color:var(--text-muted);">UNITA' DI PRODUZIONE (UP) TARGET</label>
+              <select id="sync-up-select" class="custom-select">
+                <option value="all">Tutte le UP (Flotta Completa)</option>
+              </select>
+            </div>
+
+
+
+            <div style="display: flex; gap: 8px; margin-top: auto; flex-direction: column;">
+              <div style="display: flex; gap: 8px; width: 100%;">
+                <button id="start-sync-btn" class="btn btn-primary" style="flex-grow: 1; font-size: 0.75rem; padding: 10px 8px;">
+                  ­ƒÜÇ Sincronizzazione Massiva
+                </button>
+                <button id="start-selective-sync-btn" class="btn btn-secondary" style="flex-grow: 1; font-size: 0.75rem; padding: 10px 8px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; cursor: pointer;">
+                  ÔÜí Recupero Gap
+                </button>
+              </div>
+              <button id="stop-sync-btn" class="btn btn-danger" style="display: none; padding: 10px 14px; width: 100%;">
+                ­ƒøæ Ferma Sincronizzazione
+              </button>
+            </div>
+          </div>
+
+          <!-- Card 4: Importazione Flotta UP -->
+          <div class="settings-card" style="grid-column: span 1;">
+            <h3>­ƒôï Importazione Flotta UP</h3>
+            <p>Incolla qui la lista dei nomi delle UP (una per riga) per sovrascrivere l'anagrafica flotta usata per le richieste API.</p>
+            <div class="settings-row" style="flex-grow: 1; display: flex; flex-direction: column;">
+              <textarea id="fleet-import-textarea" class="custom-select" style="font-family: var(--font-mono); font-size: 0.75rem; flex-grow: 1; min-height: 80px; resize: vertical;" placeholder="Inserisci nomi delle UP (uno per riga)...&#10;Esempio:&#10;UP_NOME_01&#10;UP_NOME_02&#10;&#10;Opzionale (formato completo):&#10;Nome UP;Tecnologia(Wind/Solar);Regione;Capacit├á(MW)&#10;Es: Eolico Alcamo;Wind;Sicilia;45"></textarea>
+            </div>
+            <div style="display: flex; gap: 8px; margin-top: auto;">
+              <button id="save-fleet-import-btn" class="btn btn-primary" style="flex-grow: 1; font-size: 0.8rem; padding: 8px;">
+                ­ƒÆ¥ Salva Flotta
+              </button>
+              <button id="reset-fleet-import-btn" class="btn btn-danger" style="font-size: 0.8rem; padding: 8px; color: var(--accent-red); background: transparent;">
+                ­ƒöä Reset
+              </button>
+            </div>
+          </div>
+          
+          <!-- Card 5: Gestione Utenze (Admin only) -->
+          <div class="settings-card" style="grid-column: span 2; display: flex; flex-direction: column; gap: 12px; min-height: 250px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <h3 style="margin: 0;">­ƒæÑ Gestione Ruoli & Utenze</h3>
+                <p style="margin: 4px 0 0 0;">Visualizza gli utenti che hanno eseguito l'accesso e gestisci i loro privilegi di amministratore.</p>
+              </div>
+              <button id="refresh-users-btn" class="icon-btn" style="background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.2); color: #60a5fa; cursor: pointer; padding: 6px 12px; border-radius: 6px; font-size: 0.72rem; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                ­ƒöä Aggiorna Lista
+              </button>
+            </div>
+            
+            <div style="flex-grow: 1; overflow-x: auto; background: rgba(0,0,0,0.15); border: 1px solid var(--panel-border); border-radius: 10px; margin-top: 10px;">
+              <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.75rem;">
+                <thead>
+                  <tr style="border-bottom: 1px solid var(--panel-border); background: rgba(255,255,255,0.02); height: 35px;">
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); width: 40px;"></th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted);">Nome</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted);">Email</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); width: 100px;">Ruolo</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); text-align: right; width: 150px;">Azioni</th>
+                  </tr>
+                </thead>
+                <tbody id="settings-users-tbody">
+                  <!-- Dynamic user rows will be loaded here -->
+                  <tr style="height: 60px;">
+                    <td colspan="5" style="text-align: center; color: var(--text-muted); font-style: italic;">Caricamento utenti...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+        </div>
+
+        <!-- Progress status & monospaced console -->
+        <div class="settings-card" style="flex-grow: 1;">
+          <div class="progress-container">
+            <div class="progress-text">
+              <span>Progressione Sincronizzazione Storica (SW Queue)</span>
+              <span id="sync-progress-text">Nessuna sincronizzazione in corso</span>
+            </div>
+            <div class="progress-bar-track">
+              <div id="sync-progress-fill" class="progress-bar-fill"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="console-panel" style="margin-top: 15px;">
+          <div class="console-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span class="console-header" style="margin-bottom: 0; font-size: 0.8rem; font-weight: 600; color: var(--text-muted);">Console Log Operativo (SW Background Process)</span>
+            <button id="clear-logs-btn" class="btn btn-secondary" style="font-size: 0.75rem; padding: 4px 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: var(--text-muted); cursor: pointer; border-radius: 4px; transition: all 0.2s;">
+              ­ƒùæ´©Å Pulisci Log
+            </button>
+          </div>
+          <pre id="console-logs" class="console-pre" style="max-height: 250px; overflow-y: auto;">Benvenuto nella console di monitoraggio PWA.
+Attiva un'acquisizione storica per visualizzare il registro delle richieste sequentially rate-limited (2s delay).
+</pre>
+        </div>
+      </div>
+
+      </section>
+    </main>
+    </div> <!-- Close main-wrapper -->
+  </div> <!-- Close app-container -->
+
+  <!-- Confirmation modal for Clear DB -->
+  <div id="confirm-clear-modal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-title">Conferma Svuotamento Archivio</div>
+      <div class="modal-desc">
+        Questa operazione ├¿ distruttiva ed eliminer├á in modo permanente tutti i record di telemetria (Meter/SCADA) e le indisponibilit├á (Outages) memorizzati in IndexedDB. Vuoi procedere?
+      </div>
+      <div class="modal-actions">
+        <button id="modal-cancel-btn" class="btn btn-secondary" style="background:#1f2937; color:#f3f4f6;">Annulla</button>
+        <button id="modal-confirm-btn" class="btn btn-danger">S├¼, Elimina Tutto</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="heatmap-tooltip" class="heatmap-tooltip"></div>
+  <div id="chart-tooltip" class="chart-tooltip" style="position: absolute; display: none; background: rgba(13, 16, 27, 0.95); border: 1px solid var(--panel-border); border-radius: 8px; padding: 12px; color: var(--text-main); font-size: 0.8rem; box-shadow: var(--shadow-xl); pointer-events: none; z-index: 1000; backdrop-filter: blur(8px); min-width: 160px; font-family: var(--font-sans); border-left: 3px solid #3b82f6;"></div>
+
+  <!-- App Entry Point scripts -->
+  <script type="module" src="./src/main.js?v=80"></script>
+</body>
+</html>
