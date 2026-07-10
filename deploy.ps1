@@ -19,7 +19,8 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "=== Deploy: Copying built output to root ===" -ForegroundColor Cyan
 # Copy built index.html (references fixed ./assets/index.js, ./assets/index.css)
-Copy-Item -Force "dist\index.html" ".\index.html"
+# Use index.src.html directly (avoids Vite re-encoding unicode)
+Copy-Item -Force "index.src.html" ".\index.html"
 # Copy built assets (no hashes! always same names)
 Copy-Item -Force "dist\assets\index.js"      ".\assets\index.js"
 Copy-Item -Force "dist\assets\index.css"     ".\assets\index.css"
