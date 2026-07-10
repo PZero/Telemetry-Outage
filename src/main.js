@@ -1383,12 +1383,9 @@ function setupSettingsHandlers() {
         headers: getAuthHeaders(),
         body: JSON.stringify(customList)
       })
-      .then(response => {
+      .then(async response => {
         if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-        return import("./registry.js");
-      })
-      .then(async (module) => {
-        await module.loadUPRegistry();
+        await loadUPRegistry();
         
         // Re-populate region and search dropdowns in Sidebar
         populateDropdowns();
@@ -1415,12 +1412,9 @@ function setupSettingsHandlers() {
           method: "POST",
           headers: getAuthHeaders()
         })
-        .then(response => {
+        .then(async response => {
           if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-          return import("./registry.js");
-        })
-        .then(async (module) => {
-          await module.loadUPRegistry();
+          await loadUPRegistry();
           populateDropdowns();
           updateSettingsLogs("Flotta UP ripristinata ai valori predefiniti (100 UP).");
           alert("Flotta ripristinata ai valori predefiniti!");
@@ -1560,7 +1554,6 @@ async function triggerYesterdaySync(isAuto = false) {
   const storedDate = localStorage.getItem("yesterday_sync_date");
   if (storedDate !== yesterdayStr) {
     localStorage.setItem("yesterday_sync_date", yesterdayStr);
-    localStorage.setItem("yesterday_sync_completed_ups", JSON.stringify([]));
     localStorage.setItem("yesterday_sync_status", "pending");
   }
 
@@ -1571,67 +1564,30 @@ async function triggerYesterdaySync(isAuto = false) {
     return;
   }
 
-  let completedUPs = [];
-  try {
-    completedUPs = JSON.parse(localStorage.getItem("yesterday_sync_completed_ups")) || [];
-  } catch (e) {
-    completedUPs = [];
-  }
-
-  // Filter UPs that are not completed yet
-  const targetUPs = UP_REGISTRY.filter(up => !completedUPs.includes(up.id));
-
-  if (targetUPs.length === 0) {
-    localStorage.setItem("yesterday_sync_status", "completed");
-    if (!isAuto) {
-      alert("I dati di ieri per tutte le UP sono già stati scaricati con successo!");
-    }
-    return;
-  }
-
-  // Refresh token if needed
-  await autoRefreshAzureToken();
-
-  const token = localStorage.getItem("azure_api_token") || "";
-  const simMode = isSimulatedMode();
-
-  const tasks = [];
-  for (const up of targetUPs) {
-    const noScada = isScadaDisabled(up.id);
-    
-    // We always fetch METER and OUTAGES. We fetch SCADA only if not disabled.
-    tasks.push({ upId: up.id, date: yesterdayStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
-    if (!noScada) {
-      tasks.push({ upId: up.id, date: yesterdayStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: false });
-    }
-    tasks.push({ upId: up.id, date: yesterdayStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
-  }
-
-  // Deduplicate against active queue
-  const existingKeys = new Set(state.syncQueue.map(t => `${t.upId}_${t.date}_${t.type}`));
-  const uniqueTasks = tasks.filter(t => !existingKeys.has(`${t.upId}_${t.date}_${t.type}`));
-
-  if (uniqueTasks.length === 0) {
-    if (!isAuto) {
-      showToastNotification("I dati di ieri sono già in coda o completati.");
-    }
-    return;
-  }
-
   if (state.isSyncRunning) {
-    state.syncQueue.push(...uniqueTasks);
-    state.totalTasks += uniqueTasks.length;
-    updateSettingsLogs(`Accodati ${uniqueTasks.length} task per l'aggiornamento di ieri.`);
-    showToastNotification(`Accodati ${uniqueTasks.length} task di ieri`);
-  } else {
-    state.syncQueue = uniqueTasks;
-    state.totalTasks = uniqueTasks.length;
-    state.completedTasks = 0;
+    return;
+  }
+
+  try {
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    const response = await fetch(`${apiUrl}/api/sync/start`, {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ rangeDays: 1, isSelective: true, upId: "all", simMode: isSimulatedMode() })
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      updateSettingsLogs(`[Auto-Sync] ERRORE avvio: ${err.error}`);
+      return;
+    }
+
     state.isSyncRunning = true;
-    state.shouldCancelSync = false;
-    updateSettingsLogs(`Avvio aggiornamento dati di ieri per ${targetUPs.length} UP (${uniqueTasks.length} task)...`);
-    showToastNotification(`Avviato aggiornamento dati di ieri`);
-    runMainSyncQueue();
+    localStorage.setItem("yesterday_sync_status", "completed");
+    updateSettingsLogs("Sincronizzazione dati di ieri avviata con successo sul backend.");
+    startSyncStatusPoller();
+  } catch (err) {
+    updateSettingsLogs(`[Auto-Sync] ERRORE di rete: ${err.message}`);
   }
 }
 
