@@ -1036,12 +1036,17 @@ async function triggerDailyForceRefetch(upId, dateStr) {
   try {
     updateSettingsLogs(`[Daily Refetch] Avvio re-sync immediato per ${up.name} in data ${dateStr}...`);
     
-    // Process single tasks sequentially in the main thread
-    await sendTaskToSW({ upId, date: dateStr, type: "meter", upName: up.name, upTech: up.tech, token, simulated: simMode });
-    await sendTaskToSW({ upId, date: dateStr, type: "scada", upName: up.name, upTech: up.tech, token, simulated: simMode, noScada: isScadaDisabled(upId) });
-    await sendTaskToSW({ upId, date: dateStr, type: "outages", upName: up.name, upTech: up.tech, token, simulated: simMode });
-    
-    updateSettingsLogs(`[Daily Refetch] Re-sync completato per ${up.name}.`);
+    // Call the backend sync engine for this specific UP/date
+    const apiUrl = import.meta.env.VITE_API_URL || "https://telemetry-outage.onrender.com";
+    const session = JSON.parse(localStorage.getItem("google_user_session") || "{}");
+    const syncResponse = await fetch(`${apiUrl}/api/sync/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.token || ""}` },
+      body: JSON.stringify({ rangeDays: 1, isSelective: false, upId, simMode })
+    });
+    if (!syncResponse.ok) throw new Error(`Backend sync error: ${syncResponse.status}`);
+
+    updateSettingsLogs(`[Daily Refetch] Re-sync avviato per ${up.name} in data ${dateStr}. Attendi completamento...`);
   } catch (err) {
     updateSettingsLogs(`[Daily Refetch ERROR] Sincronizzazione fallita: ${err.message || err}`);
   } finally {

@@ -302,11 +302,20 @@ async function fetchObservationsFromAzureRange(upId, startDate, endDate, type, s
     return await proxyToAzure('/api/observation', reqBody);
   });
 
+  const seriesLen = rawData?.tag?.series?.length ?? 'NO_SERIES';
+  const sampleDates = rawData?.tag?.series
+    ? [...new Set(rawData.tag.series.slice(0, 5).map(i => i.date))]
+    : [];
+  console.log(`[SyncEngine] Azure response for ${upName}/${type}: seriesLen=${seriesLen}, sampleDates=${JSON.stringify(sampleDates)}`);
+
   const results = {};
   const startD = new Date(startObj);
   for (let d = new Date(startD); d <= endObj; d.setDate(d.getDate() + 1)) {
     const dateStr = d.toISOString().split('T')[0];
-    results[dateStr] = parseObservationResponse(rawData, upName || upId, upTech || "Solar", dateStr, type);
+    const parsed = parseObservationResponse(rawData, upName || upId, upTech || "Solar", dateStr, type);
+    const nonNull = parsed.filter(v => v !== null).length;
+    console.log(`[SyncEngine] Parsed ${dateStr} ${type}: ${nonNull}/${parsed.length} non-null values`);
+    results[dateStr] = parsed;
   }
   return results;
 }
@@ -325,9 +334,34 @@ async function fetchOutagesFromAzureRange(upId, startDate, endDate, simulated, p
     endDate: endDate
   };
 
-  return await enqueueRequest('/api/outage', reqBody, async () => {
+  const rawData = await enqueueRequest('/api/outage', reqBody, async () => {
     return await proxyToAzure('/api/outage', reqBody);
   });
+
+  console.log(`[SyncEngine] Outage raw response for ${upId}: ${JSON.stringify(rawData).substring(0, 300)}`);
+
+  // Parse outage response: Azure returns an array directly or wrapped
+  let outageList = [];
+  if (Array.isArray(rawData)) {
+    outageList = rawData;
+  } else if (rawData && Array.isArray(rawData.data)) {
+    outageList = rawData.data;
+  } else if (rawData && Array.isArray(rawData.outages)) {
+    outageList = rawData.outages;
+  } else if (rawData && Array.isArray(rawData.items)) {
+    outageList = rawData.items;
+  }
+
+  // Normalize outage objects to our schema
+  return outageList.map(o => ({
+    outage_id: o.outage_id || o.id || `${upId}_${o.startDate || o.start_date || Date.now()}`,
+    up_id: upId,
+    startDate: o.startDate || o.start_date || o.from_UTC || startDate,
+    endDate: o.endDate || o.end_date || o.to_UTC || endDate,
+    reductionPercentage: o.reductionPercentage || o.reduction_percentage || o.reduction || 0,
+    residualCapacity: o.residualCapacity || o.residual_capacity || 0,
+    notes: o.notes || o.description || ''
+  }));
 }
 
 function generateMockObservations(upId, date, type, tech) {
