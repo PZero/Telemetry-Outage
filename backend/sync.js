@@ -89,7 +89,7 @@ export async function startSync(params, proxyToAzure) {
     throw new Error("Una sincronizzazione è già in corso.");
   }
 
-  const { rangeDays, isSelective, upId, simMode } = params;
+  const { rangeDays, isSelective, upId, simMode, specificDate } = params;
   
   isSyncRunning = true;
   shouldCancelSync = false;
@@ -99,18 +99,23 @@ export async function startSync(params, proxyToAzure) {
   logs = [];
   syncQueue = [];
 
-  addLog(`Avvio sincronizzazione storica (Giorni: ${rangeDays}, Selettiva: ${isSelective}, UP: ${upId}, Simulata: ${simMode})`);
+  addLog(`Avvio sincronizzazione storica (Giorni: ${rangeDays}, Selettiva: ${isSelective}, UP: ${upId}, Simulata: ${simMode}${specificDate ? ', DataSpecifica: ' + specificDate : ''})`);
 
-  const syncDates = [];
-  const startDay = new Date();
-  startDay.setDate(startDay.getDate() - 1);
-  for (let i = 0; i < rangeDays; i++) {
-    const d = new Date(startDay);
-    d.setDate(d.getDate() - i);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    syncDates.push(`${year}-${month}-${day}`);
+  let syncDates = [];
+  if (specificDate) {
+    // Single specific date override
+    syncDates = [specificDate];
+  } else {
+    const startDay = new Date();
+    startDay.setDate(startDay.getDate() - 1);
+    for (let i = 0; i < rangeDays; i++) {
+      const d = new Date(startDay);
+      d.setDate(d.getDate() - i);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      syncDates.push(`${year}-${month}-${day}`);
+    }
   }
 
   try {

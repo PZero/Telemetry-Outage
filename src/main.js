@@ -1042,7 +1042,7 @@ async function triggerDailyForceRefetch(upId, dateStr) {
     const syncResponse = await fetch(`${apiUrl}/api/sync/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${session.token || ""}` },
-      body: JSON.stringify({ rangeDays: 1, isSelective: false, upId, simMode })
+      body: JSON.stringify({ rangeDays: 1, isSelective: false, upId, simMode, specificDate: dateStr })
     });
     if (!syncResponse.ok) throw new Error(`Backend sync error: ${syncResponse.status}`);
 
