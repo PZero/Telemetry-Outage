@@ -237,6 +237,19 @@ app.get('/api/queue/status', (req, res) => {
 /**
  * Observations Storage Endpoints
  */
+app.get('/api/db/observations/bulk', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Missing required parameters startDate or endDate.' });
+    }
+    const data = await dbService.getObservationsBulk(startDate, endDate);
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/db/observations', async (req, res) => {
   try {
     const { upId, date, type } = req.query;
@@ -266,6 +279,15 @@ app.post('/api/db/observations', async (req, res) => {
 /**
  * Outages Storage Endpoints
  */
+app.get('/api/db/outages/bulk', async (req, res) => {
+  try {
+    const outages = await dbService.getOutagesBulk();
+    res.json({ outages });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/api/db/outages', async (req, res) => {
   try {
     const { upId } = req.query;
