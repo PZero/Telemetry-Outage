@@ -12,8 +12,15 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Enable CORS
-app.use(cors());
+// Enable CORS for GitHub Pages and local dev
+app.use(cors({
+  origin: [
+    'https://pzero.github.io',
+    'http://localhost:5000',
+    'http://localhost:3000'
+  ],
+  credentials: true
+}));
 
 // Parse JSON request bodies
 app.use(express.json());

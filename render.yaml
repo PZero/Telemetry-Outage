@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: telemetry-outage-backend
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AZURE_API_BASE_URL
+        value: https://ergapim.azure-api.net/databrowsing/v2
+      # I seguenti vanno impostati manualmente nella dashboard Render (non sono nel codice):
+      - key: DATABASE_URL
+        sync: false
+      - key: AZURE_TENANT_ID
+        sync: false
+      - key: AZURE_CLIENT_ID
+        sync: false
+      - key: AZURE_CLIENT_SECRET
+        sync: false
+      - key: AZURE_SCOPE
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
