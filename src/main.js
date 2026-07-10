@@ -1725,7 +1725,8 @@ async function printDatabaseDiagnostics() {
     const stats = await response.json();
     updateSettingsLogs(`[DB Diagnostics] Record Osservazioni: ${stats.observations} | Record Outages: ${stats.outages}`);
   } catch (err) {
-    updateSettingsLogs(`[DB Diagnostics ERROR] ${err.message}`);
+    const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+    updateSettingsLogs(`[DB Diagnostics ERROR] ${err.message} (URL: ${apiUrl}/api/db/stats)`);
   }
 }
 
