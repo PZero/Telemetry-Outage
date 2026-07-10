@@ -2,7 +2,7 @@
 // Manages Canvas-based Fleet Heatmap, Daily Ribbons, and Profile Charts.
 
 import { getUPById, isScadaDisabled } from "./registry.js";
-import { getObservations, getOutagesForPeriod, getObservationRecord } from "./db.js";
+import { getObservations, getOutagesForPeriod, getObservationRecord, preloadObservationsBulk, preloadOutagesBulk } from "./db.js";
 
 // Helper: Classifies the integrity of a single day for a UP
 // Returns: 'green' | 'orange' | 'red' | 'grey'
@@ -155,7 +155,13 @@ export async function renderFleetHeatmap(canvas, upList, dateRange, onCellClick)
     return;
   }
 
-  // Load status grid concurrently for performance before modifying canvas size to prevent white flickering
+  // Pre-load all database records in bulk to populate local memory caches (reduces network queries from 9000 to 2)
+  await preloadOutagesBulk();
+  if (dateRange.length > 0) {
+    await preloadObservationsBulk(dateRange[0], dateRange[dateRange.length - 1]);
+  }
+
+  // Load status grid concurrently from local cache
   const allRowsPromises = upList.map(async (up) => {
     return await Promise.all(dateRange.map(dateStr => classifyDayIntegrity(up, dateStr)));
   });

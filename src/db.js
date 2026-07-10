@@ -48,6 +48,65 @@ export function clearClientCaches() {
 }
 
 /**
+ * Pre-loads observations in bulk for a date range to pre-populate memory cache.
+ */
+export async function preloadObservationsBulk(startDate, endDate) {
+  try {
+    const url = `${BASE_URL}/api/db/observations/bulk?startDate=${startDate}&endDate=${endDate}`;
+    const response = await throttledFetch(url, {
+      headers: getAuthHeaders()
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    const data = await response.json();
+    
+    data.forEach(row => {
+      const cacheKey = `${row.up_id}|${row.date}|${row.type}`;
+      observationsCache[cacheKey] = Promise.resolve(JSON.parse(row.values_json));
+    });
+    console.log(`[Storage Proxy] Preloaded ${data.length} observations in bulk.`);
+    return true;
+  } catch (err) {
+    console.error('[Storage Proxy] preloadObservationsBulk failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Pre-loads all outages in bulk to pre-populate memory cache.
+ */
+export async function preloadOutagesBulk() {
+  try {
+    const url = `${BASE_URL}/api/db/outages/bulk`;
+    const response = await throttledFetch(url, {
+      headers: getAuthHeaders()
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    const data = await response.json();
+    
+    // Reset cache keys
+    for (const k in outagesCache) delete outagesCache[k];
+    
+    const grouped = {};
+    if (data.outages) {
+      data.outages.forEach(o => {
+        if (!grouped[o.up_id]) grouped[o.up_id] = [];
+        grouped[o.up_id].push(o);
+      });
+    }
+    
+    for (const upId in grouped) {
+      outagesCache[upId] = Promise.resolve(grouped[upId]);
+    }
+    console.log(`[Storage Proxy] Preloaded outages in bulk.`);
+    return true;
+  } catch (err) {
+    console.error('[Storage Proxy] preloadOutagesBulk failed:', err);
+    return false;
+  }
+}
+
+
+/**
  * No-op initialization for compatibility.
  */
 export function initDB() {
