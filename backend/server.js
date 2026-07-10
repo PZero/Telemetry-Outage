@@ -433,8 +433,8 @@ app.get('/api/db/stats', async (req, res) => {
  */
 app.post('/api/sync/start', requireAdmin, async (req, res) => {
   try {
-    const { rangeDays, isSelective, upId, simMode } = req.body;
-    await startSync({ rangeDays: parseInt(rangeDays) || 30, isSelective: !!isSelective, upId: upId || 'all', simMode: !!simMode }, proxyToAzure);
+    const { rangeDays, isSelective, upId, simMode, specificDate } = req.body;
+    await startSync({ rangeDays: parseInt(rangeDays) || 30, isSelective: !!isSelective, upId: upId || 'all', simMode: !!simMode, specificDate: specificDate || null }, proxyToAzure);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -417,15 +417,30 @@ function parseObservationResponse(rawData, upId, tech, date, type) {
 
   const series = rawData.tag.series;
   const values = Array(steps).fill(null);
+  let matchedCount = 0;
+  let skippedDates = new Set();
 
   series.forEach(item => {
     if (!item.date || item.valore === undefined || item.valore === null) return;
-    const adjustedDateObj = new Date(new Date(item.date).getTime() + 3600000);
-    const romeDateStr = adjustedDateObj.toISOString().split("T")[0];
-    if (romeDateStr !== date) return;
+    
+    // Try both UTC date and +1h adjusted date to handle timezone variations
+    const rawDateObj = new Date(item.date);
+    const rawDateStr = rawDateObj.toISOString().split('T')[0];
+    const adjustedDateObj = new Date(rawDateObj.getTime() + 3600000);
+    const adjustedDateStr = adjustedDateObj.toISOString().split('T')[0];
+    
+    let useDateObj;
+    if (rawDateStr === date) {
+      useDateObj = rawDateObj;
+    } else if (adjustedDateStr === date) {
+      useDateObj = adjustedDateObj;
+    } else {
+      skippedDates.add(rawDateStr);
+      return;
+    }
 
-    const hours = adjustedDateObj.getHours();
-    const minutes = adjustedDateObj.getMinutes();
+    const hours = useDateObj.getUTCHours();
+    const minutes = useDateObj.getUTCMinutes();
     let index;
     if (steps === 144) {
       index = hours * 6 + Math.floor(minutes / 10);
@@ -435,8 +450,14 @@ function parseObservationResponse(rawData, upId, tech, date, type) {
 
     if (index >= 0 && index < steps) {
       values[index] = item.valore;
+      matchedCount++;
     }
   });
 
+  if (matchedCount === 0 && series.length > 0) {
+    console.warn(`[SyncEngine] parseObservationResponse: 0 matches for date=${date}. Series has ${series.length} items. Sample skipped dates: ${[...skippedDates].slice(0,3).join(', ')}`);
+  }
+
   return values;
 }
+

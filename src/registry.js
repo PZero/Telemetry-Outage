@@ -58,9 +58,15 @@ export async function loadUPRegistry() {
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
     const data = await response.json();
     UP_REGISTRY.length = 0;
-    UP_REGISTRY.push(...data);
+    // Map DB field ppa_partner → ppaTag so the frontend PPA filter works correctly
+    UP_REGISTRY.push(...data.map(up => ({
+      ...up,
+      ppaTag: up.ppa_partner || up.ppaTag || null,
+      scada_disabled: up.scada_disabled === 1 || up.scada_disabled === true
+    })));
     updateUniqueRegions();
     console.log(`[Registry] Loaded ${data.length} UPs from backend database.`);
+
   } catch (err) {
     console.error("[Registry] Failed to fetch registry from backend:", err);
     // Only fall back to mock if we had a token (backend network error, not auth error)
