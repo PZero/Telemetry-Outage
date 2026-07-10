@@ -162,6 +162,76 @@ app.get('/api/auth/google/config', (req, res) => {
   });
 });
 
+/**
+ * Temporary public debug endpoint: tests one real Azure observation call and saves to DB.
+ * Usage: GET /api/debug-observation?upId=UP_001&date=2026-07-09&type=meter&upName=Test
+ */
+app.get('/api/debug-observation', async (req, res) => {
+  const upId = req.query.upId || 'UP_001';
+  const date = req.query.date || '2026-07-09';
+  const type = req.query.type || 'meter';
+  const upName = req.query.upName || upId;
+  const report = { upId, date, type, upName, steps: [] };
+
+  try {
+    // Step 1: Get Azure token
+    const token = await getAzureToken();
+    report.steps.push({ step: 'azure_token', ok: true });
+
+    // Step 2: Call Azure API
+    const prevDate = new Date(new Date(date).getTime() - 86400000).toISOString().split('T')[0];
+    const nextDate = new Date(new Date(date).getTime() + 86400000).toISOString().split('T')[0];
+    const reqBody = {
+      from_UTC: `${prevDate}T21:00:00`,
+      to_UTC: `${nextDate}T03:00:00`,
+      update: false,
+      upname: [upName],
+      aggregatedData: false,
+      type,
+      upId,
+      startDate: date,
+      endDate: date
+    };
+    const rawData = await proxyToAzure('/api/observation', reqBody);
+    const seriesCount = rawData?.tag?.series?.length ?? 'N/A (no tag.series)';
+    const rawPreview = JSON.stringify(rawData).substring(0, 500);
+    report.steps.push({ step: 'azure_call', ok: true, seriesCount, rawPreview });
+
+    // Step 3: Parse
+    const steps = 96;
+    let values = Array(steps).fill(null);
+    if (rawData?.tag?.series) {
+      rawData.tag.series.forEach(item => {
+        if (!item.date || item.valore === undefined || item.valore === null) return;
+        const adjustedDateObj = new Date(new Date(item.date).getTime() + 3600000);
+        const romeDateStr = adjustedDateObj.toISOString().split('T')[0];
+        if (romeDateStr !== date) return;
+        const hours = adjustedDateObj.getHours();
+        const minutes = adjustedDateObj.getMinutes();
+        const index = hours * 4 + Math.floor(minutes / 15);
+        if (index >= 0 && index < steps) values[index] = item.valore;
+      });
+    }
+    const nonNullCount = values.filter(v => v !== null).length;
+    // Also show what dates actually appear in the series
+    const datesInSeries = rawData?.tag?.series
+      ? [...new Set(rawData.tag.series.map(i => new Date(new Date(i.date).getTime() + 3600000).toISOString().split('T')[0]))]
+      : [];
+    report.steps.push({ step: 'parse', ok: true, nonNullCount, datesInSeries });
+
+    // Step 4: Save to DB
+    await dbService.saveObservations(upId, date, type, values);
+    const saved = await dbService.getObservations(upId, date, type);
+    const savedNonNull = saved ? saved.filter(v => v !== null).length : 0;
+    report.steps.push({ step: 'db_save', ok: true, savedNonNull });
+
+    res.json(report);
+  } catch (err) {
+    report.steps.push({ step: 'ERROR', message: err.message });
+    res.status(500).json(report);
+  }
+});
+
 // Secure all subsequent API endpoints
 app.use('/api', requireGoogleAuth);
 
