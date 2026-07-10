@@ -156,10 +156,12 @@ export async function renderFleetHeatmap(canvas, upList, dateRange, onCellClick)
   }
 
   // Pre-load all database records in bulk to populate local memory caches (reduces network queries from 9000 to 2)
+  if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Avvio precaricamento bulk per ${numUPs} UP (${numDays} giorni)...`);
   await preloadOutagesBulk();
   if (dateRange.length > 0) {
     await preloadObservationsBulk(dateRange[0], dateRange[dateRange.length - 1]);
   }
+  if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Precaricamento dati completato. Calcolo integrità...`);
 
   // Load status grid concurrently from local cache
   const allRowsPromises = upList.map(async (up) => {
@@ -174,6 +176,7 @@ export async function renderFleetHeatmap(canvas, upList, dateRange, onCellClick)
   cachedOnCellClick = onCellClick;
 
   drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellClick);
+  if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Heatmap flotta renderizzata con successo.`);
 }
 
 export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellClick) {

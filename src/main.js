@@ -1654,6 +1654,8 @@ function updateSettingsLogs(message = null) {
     consolePre.scrollTop = consolePre.scrollHeight;
   }
 }
+window.updateSettingsLogs = updateSettingsLogs;
+
 
 async function updatePersistenceBadge() {
   const indicator = document.getElementById("persist-status-indicator");
