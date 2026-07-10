@@ -182,6 +182,11 @@ window.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
+  const versionBadge = document.getElementById("app-version-badge");
+  if (versionBadge) {
+    versionBadge.innerText = window.APP_VERSION || "v83";
+  }
+
   // 3. Initialize UI states and filters safely
   try {
     setupFilters();
