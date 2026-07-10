@@ -2062,6 +2062,7 @@ function loginUser(user) {
       applyFiltersAndRender();
     } catch (err) {
       console.error("[Auth Boot] Failed to load secure backend data:", err);
+      logoutUser(); // Force logout to clear invalid/expired token and show login screen
     }
   })();
 }
