@@ -156,10 +156,6 @@ app.get('/api/health', async (req, res) => {
     debugBulkErrors
   });
 });
-
-
- * Google Client Configuration public endpoint
- */
 app.get('/api/auth/google/config', (req, res) => {
   res.json({
     googleClientId: process.env.GOOGLE_CLIENT_ID || null
