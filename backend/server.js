@@ -22,6 +22,12 @@ app.use(cors({
   credentials: true
 }));
 
+// Request Logger for Diagnostics
+app.use((req, res, next) => {
+  console.log(`[HTTP] ${req.method} ${req.path}`);
+  next();
+});
+
 // Parse JSON request bodies
 app.use(express.json());
 
