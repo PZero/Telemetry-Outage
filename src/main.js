@@ -597,6 +597,10 @@ function setupFilters() {
  * Filters the flotta list and triggers heatmap redraw.
  */
 async function applyFiltersAndRender() {
+  if (!state.user) {
+    console.log("[Render] Skipping render - User not authenticated.");
+    return;
+  }
   if (state.view !== "fleet" && state.view !== "stats") return;
 
   const canvas = document.getElementById("heatmap-canvas");

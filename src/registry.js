@@ -120,9 +120,6 @@ function updateUniqueRegions() {
   UNIQUE_REGIONS.push(...regionsSet);
 }
 
-// Initial load (sync fallback, async will update when main.js calls it on startup)
-loadDefaultMockRegistry();
-
 // Helper to get UP details by ID or Name
 export function getUPById(id) {
   if (!id) return null;
