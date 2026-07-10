@@ -121,11 +121,25 @@ async function proxyToAzure(endpointPath, clientRequestBody) {
 /**
  * Health Check endpoint
  */
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'Disconnected';
+  let dbError = null;
+  let stats = null;
+  
+  try {
+    stats = await dbService.getStats();
+    dbStatus = 'Connected';
+  } catch (err) {
+    dbError = err.message;
+  }
+
   res.json({
     status: 'online',
     timestamp: new Date().toISOString(),
-    apiConfigured: !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET)
+    apiConfigured: !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET),
+    database: dbStatus,
+    dbError,
+    stats
   });
 });
 
@@ -136,24 +150,6 @@ app.get('/api/auth/google/config', (req, res) => {
   res.json({
     googleClientId: process.env.GOOGLE_CLIENT_ID || null
   });
-});
-
-// Public Health Check Endpoint for Database Diagnostics
-app.get('/api/health', async (req, res) => {
-  try {
-    const pg = await dbService.getStats();
-    res.json({
-      status: 'OK',
-      database: 'Connected',
-      stats: pg
-    });
-  } catch (err) {
-    res.status(500).json({
-      status: 'ERROR',
-      database: 'Disconnected',
-      error: err.message
-    });
-  }
 });
 
 // Secure all subsequent API endpoints
