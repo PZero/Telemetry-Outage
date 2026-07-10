@@ -125,6 +125,7 @@ app.get('/api/health', async (req, res) => {
   let dbStatus = 'Disconnected';
   let dbError = null;
   let stats = null;
+  let debugBulkErrors = {};
   
   try {
     stats = await dbService.getStats();
@@ -133,34 +134,29 @@ app.get('/api/health', async (req, res) => {
     dbError = err.message;
   }
 
+  // Debug SQL queries
+  try {
+    await dbService.getOutagesBulk();
+  } catch (err) {
+    debugBulkErrors.outages = err.message;
+  }
+  try {
+    await dbService.getObservationsBulk('2026-06-09', '2026-07-09');
+  } catch (err) {
+    debugBulkErrors.observations = err.message;
+  }
+
   res.json({
     status: 'online',
     timestamp: new Date().toISOString(),
     apiConfigured: !!(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET),
     database: dbStatus,
     dbError,
-    stats
+    stats,
+    debugBulkErrors
   });
 });
 
-app.get('/api/debug-bulk', async (req, res) => {
-  try {
-    const results = {};
-    try {
-      results.outages = await dbService.getOutagesBulk();
-    } catch (e) {
-      results.outagesError = e.message;
-    }
-    try {
-      results.observations = await dbService.getObservationsBulk('2026-06-09', '2026-07-09');
-    } catch (e) {
-      results.observationsError = e.message;
-    }
-    res.json(results);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
  * Google Client Configuration public endpoint
  */
