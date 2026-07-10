@@ -143,7 +143,25 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-/**
+app.get('/api/debug-bulk', async (req, res) => {
+  try {
+    const results = {};
+    try {
+      results.outages = await dbService.getOutagesBulk();
+    } catch (e) {
+      results.outagesError = e.message;
+    }
+    try {
+      results.observations = await dbService.getObservationsBulk('2026-06-09', '2026-07-09');
+    } catch (e) {
+      results.observationsError = e.message;
+    }
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
  * Google Client Configuration public endpoint
  */
 app.get('/api/auth/google/config', (req, res) => {
