@@ -138,6 +138,24 @@ app.get('/api/auth/google/config', (req, res) => {
   });
 });
 
+// Public Health Check Endpoint for Database Diagnostics
+app.get('/api/health', async (req, res) => {
+  try {
+    const pg = await dbService.getStats();
+    res.json({
+      status: 'OK',
+      database: 'Connected',
+      stats: pg
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'ERROR',
+      database: 'Disconnected',
+      error: err.message
+    });
+  }
+});
+
 // Secure all subsequent API endpoints
 app.use('/api', requireGoogleAuth);
 
