@@ -353,9 +353,11 @@ export const dbService = {
   async getStats() {
     const obsRow = await dbGet('SELECT COUNT(*) as count FROM observations');
     const outRow = await dbGet('SELECT COUNT(*) as count FROM outages');
+    const regRow = await dbGet('SELECT COUNT(*) as count FROM registry');
     return {
       observations: parseInt(obsRow.count),
-      outages: parseInt(outRow.count)
+      outages: parseInt(outRow.count),
+      registry: parseInt(regRow.count)
     };
   }
 };
