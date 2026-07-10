@@ -1,14 +1,57 @@
-// SQLite Database proxy manager for centralized storage.
-// Replaces IndexedDB client-side storage with secure backend SQLite calls.
+// SQLite/PostgreSQL Database proxy manager for centralized storage.
+// Replaces IndexedDB client-side storage with secure backend database calls.
+// Optimized with request throttling and caching to prevent ERR_INSUFFICIENT_RESOURCES.
 
 import { getAuthHeaders } from "./api.js";
 
 const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
+// --- REQUEST THROTTLING QUEUE (MAX 15 CONCURRENT FETCHES) ---
+const MAX_CONCURRENT = 15;
+let activeRequests = 0;
+const requestQueue = [];
+
+function throttledFetch(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const execute = async () => {
+      activeRequests++;
+      try {
+        const response = await fetch(url, options);
+        resolve(response);
+      } catch (err) {
+        reject(err);
+      } finally {
+        activeRequests--;
+        processQueue();
+      }
+    };
+
+    requestQueue.push(execute);
+    processQueue();
+  });
+}
+
+function processQueue() {
+  if (activeRequests >= MAX_CONCURRENT || requestQueue.length === 0) return;
+  const nextRequest = requestQueue.shift();
+  nextRequest();
+}
+
+// --- IN-MEMORY CACHES FOR REDUNDANT REQUESTS ---
+const outagesCache = {}; // upId -> Promise(outagesList)
+const observationsCache = {}; // `${upId}|${date}|${type}` -> Promise(values)
+
+export function clearClientCaches() {
+  for (const k in outagesCache) delete outagesCache[k];
+  for (const k in observationsCache) delete observationsCache[k];
+  console.log('[Storage Proxy] Client-side memory caches cleared.');
+}
+
 /**
  * No-op initialization for compatibility.
  */
 export function initDB() {
+  clearClientCaches();
   return Promise.resolve(true);
 }
 
@@ -24,8 +67,12 @@ export async function getPersistenceStatus() {
  */
 export async function saveObservations(upId, date, type, values) {
   try {
+    const cacheKey = `${upId}|${date}|${type}`;
+    // Invalidate observation cache on save
+    delete observationsCache[cacheKey];
+
     const url = `${BASE_URL}/api/db/observations`;
-    const response = await fetch(url, {
+    const response = await throttledFetch(url, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ upId, date, type, values })
@@ -40,21 +87,34 @@ export async function saveObservations(upId, date, type, values) {
 
 /**
  * Retrieves daily observations telemetry from the centralized database.
+ * Uses request throttling and memoization to prevent network congestion.
  */
-export async function getObservations(upId, date, type) {
-  try {
-    const url = `${BASE_URL}/api/db/observations?upId=${upId}&date=${date}&type=${type}`;
-    const response = await fetch(url, {
-      headers: getAuthHeaders()
-    });
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-    const data = await response.json();
-    return data.values || null;
-  } catch (err) {
-    console.error('[Storage Proxy] getObservations failed:', err);
-    return null;
+export function getObservations(upId, date, type) {
+  const cacheKey = `${upId}|${date}|${type}`;
+  if (observationsCache[cacheKey]) {
+    return observationsCache[cacheKey];
   }
+
+  const fetchPromise = (async () => {
+    try {
+      const url = `${BASE_URL}/api/db/observations?upId=${upId}&date=${date}&type=${type}`;
+      const response = await throttledFetch(url, {
+        headers: getAuthHeaders()
+      });
+      if (response.status === 404) return null;
+      if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+      const data = await response.json();
+      return data.values || null;
+    } catch (err) {
+      console.error('[Storage Proxy] getObservations failed:', err);
+      // Remove failed promise from cache so it can be retried if needed
+      delete observationsCache[cacheKey];
+      return null;
+    }
+  })();
+
+  observationsCache[cacheKey] = fetchPromise;
+  return fetchPromise;
 }
 
 /**
@@ -83,8 +143,11 @@ export async function getObservationRecord(upId, date, type) {
  */
 export async function saveOutages(outagesList) {
   try {
+    // Invalidate all outages cache on save
+    for (const k in outagesCache) delete outagesCache[k];
+
     const url = `${BASE_URL}/api/db/outages`;
-    const response = await fetch(url, {
+    const response = await throttledFetch(url, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ outages: outagesList })
@@ -99,20 +162,32 @@ export async function saveOutages(outagesList) {
 
 /**
  * Retrieves all outages registered for a specific UP.
+ * Memoized per UP to avoid dozens of redundant HTTP queries during fleet rendering.
  */
-export async function getOutages(upId) {
-  try {
-    const url = `${BASE_URL}/api/db/outages?upId=${upId}`;
-    const response = await fetch(url, {
-      headers: getAuthHeaders()
-    });
-    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-    const data = await response.json();
-    return data.outages || [];
-  } catch (err) {
-    console.error('[Storage Proxy] getOutages failed:', err);
-    return [];
+export function getOutages(upId) {
+  if (outagesCache[upId]) {
+    return outagesCache[upId];
   }
+
+  const fetchPromise = (async () => {
+    try {
+      const url = `${BASE_URL}/api/db/outages?upId=${upId}`;
+      const response = await throttledFetch(url, {
+        headers: getAuthHeaders()
+      });
+      if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+      const data = await response.json();
+      return data.outages || [];
+    } catch (err) {
+      console.error('[Storage Proxy] getOutages failed:', err);
+      // Remove failed promise from cache
+      delete outagesCache[upId];
+      return [];
+    }
+  })();
+
+  outagesCache[upId] = fetchPromise;
+  return fetchPromise;
 }
 
 /**
@@ -143,8 +218,9 @@ export async function getOutagesForPeriod(upId, startDateISO, endDateISO) {
  */
 export async function clearDatabase() {
   try {
+    clearClientCaches();
     const url = `${BASE_URL}/api/db/clear`;
-    const response = await fetch(url, { 
+    const response = await throttledFetch(url, { 
       method: 'POST',
       headers: getAuthHeaders()
     });
@@ -163,7 +239,7 @@ export async function clearDatabase() {
 export async function deleteOlderThan(limitDate) {
   try {
     const url = `${BASE_URL}/api/db/retention`;
-    const response = await fetch(url, {
+    const response = await throttledFetch(url, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ limitDate })
