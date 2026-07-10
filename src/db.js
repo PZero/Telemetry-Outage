@@ -47,10 +47,11 @@ export function clearClientCaches() {
   console.log('[Storage Proxy] Client-side memory caches cleared.');
 }
 
-/**
- * Pre-loads observations in bulk for a date range to pre-populate memory cache.
- */
-export async function preloadObservationsBulk(startDate, endDate) {
+export async function preloadObservationsBulk(upList, dateRange) {
+  if (dateRange.length === 0) return true;
+  const startDate = dateRange[0];
+  const endDate = dateRange[dateRange.length - 1];
+  
   try {
     const url = `${BASE_URL}/api/db/observations/bulk?startDate=${startDate}&endDate=${endDate}`;
     const response = await throttledFetch(url, {
@@ -59,17 +60,33 @@ export async function preloadObservationsBulk(startDate, endDate) {
     if (!response.ok) throw new Error(`HTTP error ${response.status}`);
     const data = await response.json();
     
+    const foundKeys = new Set();
     data.forEach(row => {
       const cacheKey = `${row.up_id}|${row.date}|${row.type}`;
       observationsCache[cacheKey] = Promise.resolve(JSON.parse(row.values_json));
+      foundKeys.add(cacheKey);
     });
-    console.log(`[Storage Proxy] Preloaded ${data.length} observations in bulk.`);
+    
+    // Invalidate missing keys as null so the client doesn't query them individually
+    for (const up of upList) {
+      for (const dateStr of dateRange) {
+        for (const type of ["meter", "scada"]) {
+          const cacheKey = `${up.id}|${dateStr}|${type}`;
+          if (!foundKeys.has(cacheKey)) {
+            observationsCache[cacheKey] = Promise.resolve(null);
+          }
+        }
+      }
+    }
+    
+    console.log(`[Storage Proxy] Preloaded bulk: found ${data.length} records, cached others as null.`);
     return true;
   } catch (err) {
     console.error('[Storage Proxy] preloadObservationsBulk failed:', err);
     return false;
   }
 }
+
 
 /**
  * Pre-loads all outages in bulk to pre-populate memory cache.

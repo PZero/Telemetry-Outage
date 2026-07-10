@@ -159,7 +159,7 @@ export async function renderFleetHeatmap(canvas, upList, dateRange, onCellClick)
   if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Avvio precaricamento bulk per ${numUPs} UP (${numDays} giorni)...`);
   await preloadOutagesBulk();
   if (dateRange.length > 0) {
-    await preloadObservationsBulk(dateRange[0], dateRange[dateRange.length - 1]);
+    await preloadObservationsBulk(upList, dateRange);
   }
   if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Precaricamento dati completato. Calcolo integrità...`);
 

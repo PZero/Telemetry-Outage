@@ -249,6 +249,17 @@ export const dbService = {
     return { observations: obs.rowCount, outages: out.rowCount };
   },
 
+  async getObservationsBulk(startDate, endDate) {
+    return await dbAll(
+      'SELECT up_id, date, type, values_json FROM observations WHERE date >= $1 AND date <= $2',
+      [startDate, endDate]
+    );
+  },
+
+  async getOutagesBulk() {
+    return await dbAll('SELECT * FROM outages');
+  },
+
   async getOutages(upId) {
     return await dbAll('SELECT * FROM outages WHERE up_id = $1', [upId]);
   },
