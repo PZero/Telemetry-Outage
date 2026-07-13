@@ -1469,7 +1469,8 @@ async function triggerMassHistoricalSync(isSelective = false) {
     return;
   }
 
-  const rangeDays = state.syncDaysRange;
+  const activeRange = getActiveDateRange();
+  const rangeDays = (activeRange && activeRange.length > 0) ? activeRange.length : state.syncDaysRange;
   const syncUpSel = document.getElementById("sync-up-select");
   const selectedUpId = syncUpSel ? syncUpSel.value : "all";
   const simMode = isSimulatedMode();
@@ -1763,15 +1764,19 @@ function startSyncStatusPoller() {
 
       if (wasRunning && !data.isSyncRunning) {
         updateSettingsLogs("Sincronizzazione completata o interrotta dal backend.");
-        clearClientCaches(); // Reset client caches to load new database observations
-        printDatabaseDiagnostics();
-        if (state.view === "fleet") {
-          applyFiltersAndRender();
-        } else if (state.view === "detail") {
-          renderDeepDivePanel();
-        }
         clearInterval(syncPollInterval);
         syncPollInterval = null;
+        
+        // Wait 500ms to allow DB writes/replication to fully settle before reloading
+        setTimeout(() => {
+          clearClientCaches(); // Reset client caches to load new database observations
+          printDatabaseDiagnostics();
+          if (state.view === "fleet") {
+            applyFiltersAndRender();
+          } else if (state.view === "detail") {
+            renderDeepDivePanel();
+          }
+        }, 500);
       }
     } catch (err) {
       console.warn("[Sync Poller] Failed to query status:", err.message);
