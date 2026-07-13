@@ -59,11 +59,13 @@ export async function loadUPRegistry() {
     const data = await response.json();
     UP_REGISTRY.length = 0;
     // Map DB field ppa_partner → ppaTag so the frontend PPA filter works correctly
-    UP_REGISTRY.push(...data.map(up => ({
-      ...up,
-      ppaTag: up.ppa_partner || up.ppaTag || null,
-      scada_disabled: up.scada_disabled === 1 || up.scada_disabled === true
-    })));
+    UP_REGISTRY.push(...data.map(up => {
+      const u = { ...up };
+      u.ppaTag = u.ppa_partner || u.ppaTag || null;
+      delete u.ppa_partner; // Prevent database override of updated ppaTag values
+      u.scada_disabled = u.scada_disabled === 1 || u.scada_disabled === true;
+      return u;
+    }));
     updateUniqueRegions();
     console.log(`[Registry] Loaded ${data.length} UPs from backend database.`);
 

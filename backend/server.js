@@ -166,6 +166,14 @@ app.get('/api/auth/google/config', (req, res) => {
  * Temporary public debug endpoint: tests one real Azure observation call and saves to DB.
  * Usage: GET /api/debug-observation?upId=UP_001&date=2026-07-09&type=meter&upName=Test
  */
+function parseAzureDate(dateStr) {
+  if (!dateStr) return null;
+  const match = dateStr.match(/^(\d{2})[-/](\d{2})[-/](\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const [, day, month, year, hours, minutes, seconds] = match;
+  return new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hours), parseInt(minutes), parseInt(seconds)));
+}
+
 app.get('/api/debug-observation', async (req, res) => {
   const upId = req.query.upId || 'UP_001';
   const date = req.query.date || '2026-07-09';
@@ -193,31 +201,61 @@ app.get('/api/debug-observation', async (req, res) => {
       endDate: date
     };
     const rawData = await proxyToAzure('/api/observation', reqBody);
-    const seriesCount = rawData?.tag?.series?.length ?? 'N/A (no tag.series)';
+    const root = Array.isArray(rawData) ? rawData[0] : rawData;
+    const series = root?.tag?.series || [];
+    const seriesCount = series.length;
     const rawPreview = JSON.stringify(rawData).substring(0, 500);
     report.steps.push({ step: 'azure_call', ok: true, seriesCount, rawPreview });
 
     // Step 3: Parse
     const steps = 96;
     let values = Array(steps).fill(null);
-    if (rawData?.tag?.series) {
-      rawData.tag.series.forEach(item => {
-        if (!item.date || item.valore === undefined || item.valore === null) return;
-        const adjustedDateObj = new Date(new Date(item.date).getTime() + 3600000);
-        const romeDateStr = adjustedDateObj.toISOString().split('T')[0];
-        if (romeDateStr !== date) return;
-        const hours = adjustedDateObj.getHours();
-        const minutes = adjustedDateObj.getMinutes();
-        const index = hours * 4 + Math.floor(minutes / 15);
-        if (index >= 0 && index < steps) values[index] = item.valore;
-      });
-    }
+    series.forEach(item => {
+      const dateVal = item.deliveryDateTime || item.date;
+      const valueVal = item.value !== undefined ? item.value : item.valore;
+      if (!dateVal || valueVal === undefined || valueVal === null) return;
+
+      const rawDateObj = parseAzureDate(dateVal);
+      if (!rawDateObj) return;
+
+      const rawDateStr = rawDateObj.toISOString().split('T')[0];
+      const adjustedDateObj1 = new Date(rawDateObj.getTime() + 3600000);
+      const adjustedDateStr1 = adjustedDateObj1.toISOString().split('T')[0];
+      const adjustedDateObj2 = new Date(rawDateObj.getTime() + 7200000);
+      const adjustedDateStr2 = adjustedDateObj2.toISOString().split('T')[0];
+
+      let useDateObj;
+      if (rawDateStr === date) {
+        useDateObj = rawDateObj;
+      } else if (adjustedDateStr1 === date) {
+        useDateObj = adjustedDateObj1;
+      } else if (adjustedDateStr2 === date) {
+        useDateObj = adjustedDateObj2;
+      } else {
+        return;
+      }
+
+      const hours = useDateObj.getUTCHours();
+      const minutes = useDateObj.getUTCMinutes();
+      const index = hours * 4 + Math.floor(minutes / 15);
+      if (index >= 0 && index < steps) values[index] = valueVal;
+    });
+
     const nonNullCount = values.filter(v => v !== null).length;
     // Also show what dates actually appear in the series
-    const datesInSeries = rawData?.tag?.series
-      ? [...new Set(rawData.tag.series.map(i => new Date(new Date(i.date).getTime() + 3600000).toISOString().split('T')[0]))]
-      : [];
-    report.steps.push({ step: 'parse', ok: true, nonNullCount, datesInSeries });
+    const datesInSeries = [];
+    series.forEach(item => {
+      const dateVal = item.deliveryDateTime || item.date;
+      if (!dateVal) return;
+      const dObj = parseAzureDate(dateVal);
+      if (dObj) {
+        datesInSeries.push(dObj.toISOString().split('T')[0]);
+        datesInSeries.push(new Date(dObj.getTime() + 3600000).toISOString().split('T')[0]);
+        datesInSeries.push(new Date(dObj.getTime() + 7200000).toISOString().split('T')[0]);
+      }
+    });
+    const uniqueDatesInSeries = [...new Set(datesInSeries)];
+    report.steps.push({ step: 'parse', ok: true, nonNullCount, datesInSeries: uniqueDatesInSeries });
 
     // Step 4: Save to DB
     await dbService.saveObservations(upId, date, type, values);

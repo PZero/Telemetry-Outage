@@ -409,31 +409,47 @@ function generateMockOutages(upId, startDate, endDate) {
   return outages;
 }
 
+function parseAzureDate(dateStr) {
+  if (!dateStr) return null;
+  const match = dateStr.match(/^(\d{2})[-/](\d{2})[-/](\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const [, day, month, year, hours, minutes, seconds] = match;
+  return new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hours), parseInt(minutes), parseInt(seconds)));
+}
+
 function parseObservationResponse(rawData, upId, tech, date, type) {
   let steps = type === 'scada' && tech === 'Wind' ? 144 : 96;
-  if (!rawData || !rawData.tag || !rawData.tag.series) {
+  const root = Array.isArray(rawData) ? rawData[0] : rawData;
+  if (!root || !root.tag || !root.tag.series) {
     return Array(steps).fill(null);
   }
 
-  const series = rawData.tag.series;
+  const series = root.tag.series;
   const values = Array(steps).fill(null);
   let matchedCount = 0;
   let skippedDates = new Set();
 
   series.forEach(item => {
-    if (!item.date || item.valore === undefined || item.valore === null) return;
+    const dateVal = item.deliveryDateTime || item.date;
+    const valueVal = item.value !== undefined ? item.value : item.valore;
+    if (!dateVal || valueVal === undefined || valueVal === null) return;
     
-    // Try both UTC date and +1h adjusted date to handle timezone variations
-    const rawDateObj = new Date(item.date);
+    const rawDateObj = parseAzureDate(dateVal);
+    if (!rawDateObj) return;
+
     const rawDateStr = rawDateObj.toISOString().split('T')[0];
-    const adjustedDateObj = new Date(rawDateObj.getTime() + 3600000);
-    const adjustedDateStr = adjustedDateObj.toISOString().split('T')[0];
+    const adjustedDateObj1 = new Date(rawDateObj.getTime() + 3600000);
+    const adjustedDateStr1 = adjustedDateObj1.toISOString().split('T')[0];
+    const adjustedDateObj2 = new Date(rawDateObj.getTime() + 7200000);
+    const adjustedDateStr2 = adjustedDateObj2.toISOString().split('T')[0];
     
     let useDateObj;
     if (rawDateStr === date) {
       useDateObj = rawDateObj;
-    } else if (adjustedDateStr === date) {
-      useDateObj = adjustedDateObj;
+    } else if (adjustedDateStr1 === date) {
+      useDateObj = adjustedDateObj1;
+    } else if (adjustedDateStr2 === date) {
+      useDateObj = adjustedDateObj2;
     } else {
       skippedDates.add(rawDateStr);
       return;
@@ -449,7 +465,7 @@ function parseObservationResponse(rawData, upId, tech, date, type) {
     }
 
     if (index >= 0 && index < steps) {
-      values[index] = item.valore;
+      values[index] = valueVal;
       matchedCount++;
     }
   });

@@ -1999,8 +1999,9 @@ function loginUser(user) {
       // Update session storage with the role
       localStorage.setItem("google_user_session", JSON.stringify(state.user));
       
-      // 2. Hide or show settings nav tab based on admin role
+      // 2. Hide or show settings and ppa nav tabs based on admin role
       const navSettingsBtn = document.getElementById("nav-settings-btn");
+      const navPpaBtn = document.getElementById("nav-ppa-btn");
       if (navSettingsBtn) {
         if (state.user.role === 'admin') {
           navSettingsBtn.style.setProperty("display", "flex", "important");
@@ -2008,6 +2009,17 @@ function loginUser(user) {
           navSettingsBtn.style.setProperty("display", "none", "important");
           // If the user was somehow looking at settings, redirect them to map
           if (state.view === "settings") {
+            navigateToView("fleet");
+          }
+        }
+      }
+      if (navPpaBtn) {
+        if (state.user.role === 'admin') {
+          navPpaBtn.style.setProperty("display", "flex", "important");
+        } else {
+          navPpaBtn.style.setProperty("display", "none", "important");
+          // If the user was somehow looking at PPA panel, redirect them to map
+          if (state.view === "ppa") {
             navigateToView("fleet");
           }
         }
@@ -2154,6 +2166,7 @@ function renderPPAPanel() {
             if (up.ppaTag === tagName) {
               delete up.ppaTag;
               delete up.ppaColor;
+              delete up.ppa_partner;
             }
           });
           const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
@@ -2356,6 +2369,7 @@ function setupPPAHandlers() {
         if (ppaSelectedUPs.has(up.id)) {
           up.ppaTag = matchedTag.name;
           up.ppaColor = matchedTag.color;
+          up.ppa_partner = matchedTag.name;
         }
       });
 
@@ -2393,6 +2407,7 @@ function setupPPAHandlers() {
           if (ppaSelectedUPs.has(up.id)) {
             delete up.ppaTag;
             delete up.ppaColor;
+            delete up.ppa_partner;
           }
         });
 
