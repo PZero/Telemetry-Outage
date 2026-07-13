@@ -302,16 +302,21 @@ async function fetchObservationsFromAzureRange(upId, startDate, endDate, type, s
     startDate: startDate,
     endDate: endDate
   };
+  addLog(`[Fetch Azure Request] URL: /api/observation, UP: ${upName || upId}, Canale: ${type}, Periodo: ${startDate} al ${endDate}`);
+  addLog(`[Fetch Azure Request Body] ${JSON.stringify(reqBody)}`);
 
-  const rawData = await enqueueRequest('/api/observation', reqBody, async () => {
-    return await proxyToAzure('/api/observation', reqBody);
-  });
-
-  const seriesLen = rawData?.tag?.series?.length ?? 'NO_SERIES';
-  const sampleDates = rawData?.tag?.series
-    ? [...new Set(rawData.tag.series.slice(0, 5).map(i => i.date))]
-    : [];
-  console.log(`[SyncEngine] Azure response for ${upName}/${type}: seriesLen=${seriesLen}, sampleDates=${JSON.stringify(sampleDates)}`);
+  let rawData;
+  try {
+    rawData = await enqueueRequest('/api/observation', reqBody, async () => {
+      return await proxyToAzure('/api/observation', reqBody);
+    });
+    const root = Array.isArray(rawData) ? rawData[0] : rawData;
+    const seriesLen = root?.tag?.series?.length ?? 0;
+    addLog(`[Fetch Azure Response] OK, Elementi in serie: ${seriesLen}`);
+  } catch (err) {
+    addLog(`[Fetch Azure ERROR] Fallito per ${upName || upId}/${type}: ${err.message || err}`);
+    throw err;
+  }
 
   const results = {};
   const startD = new Date(startObj);
@@ -319,7 +324,7 @@ async function fetchObservationsFromAzureRange(upId, startDate, endDate, type, s
     const dateStr = d.toISOString().split('T')[0];
     const parsed = parseObservationResponse(rawData, upName || upId, upTech || "Solar", dateStr, type);
     const nonNull = parsed.filter(v => v !== null).length;
-    console.log(`[SyncEngine] Parsed ${dateStr} ${type}: ${nonNull}/${parsed.length} non-null values`);
+    addLog(`[Parse Observations] Data: ${dateStr}, Canale: ${type}, Caricati ${nonNull}/${parsed.length} valori validi (non nulli)`);
     results[dateStr] = parsed;
   }
   return results;
@@ -339,34 +344,42 @@ async function fetchOutagesFromAzureRange(upId, startDate, endDate, simulated, p
     endDate: endDate
   };
 
-  const rawData = await enqueueRequest('/api/outage', reqBody, async () => {
-    return await proxyToAzure('/api/outage', reqBody);
-  });
+  addLog(`[Fetch Outage Request] URL: /api/outage, UP: ${upId}, Periodo: ${startDate} al ${endDate}`);
+  addLog(`[Fetch Outage Request Body] ${JSON.stringify(reqBody)}`);
 
-  console.log(`[SyncEngine] Outage raw response for ${upId}: ${JSON.stringify(rawData).substring(0, 300)}`);
-
-  // Parse outage response: Azure returns an array directly or wrapped
-  let outageList = [];
-  if (Array.isArray(rawData)) {
-    outageList = rawData;
-  } else if (rawData && Array.isArray(rawData.data)) {
-    outageList = rawData.data;
-  } else if (rawData && Array.isArray(rawData.outages)) {
-    outageList = rawData.outages;
-  } else if (rawData && Array.isArray(rawData.items)) {
-    outageList = rawData.items;
+  let rawData;
+  try {
+    rawData = await enqueueRequest('/api/outage', reqBody, async () => {
+      return await proxyToAzure('/api/outage', reqBody);
+    });
+    
+    let outageList = [];
+    if (Array.isArray(rawData)) {
+      outageList = rawData;
+    } else if (rawData && Array.isArray(rawData.data)) {
+      outageList = rawData.data;
+    } else if (rawData && Array.isArray(rawData.outages)) {
+      outageList = rawData.outages;
+    } else if (rawData && Array.isArray(rawData.items)) {
+      outageList = rawData.items;
+    }
+    
+    addLog(`[Fetch Outage Response] OK, Outages trovati: ${outageList.length}`);
+    
+    // Normalize outage objects to our schema
+    return outageList.map(o => ({
+      outage_id: o.outage_id || o.id || `${upId}_${o.startDate || o.start_date || Date.now()}`,
+      up_id: upId,
+      startDate: o.startDate || o.start_date || o.from_UTC || startDate,
+      endDate: o.endDate || o.end_date || o.to_UTC || endDate,
+      reductionPercentage: o.reductionPercentage || o.reduction_percentage || o.reduction || 0,
+      residualCapacity: o.residualCapacity || o.residual_capacity || 0,
+      notes: o.notes || o.description || ''
+    }));
+  } catch (err) {
+    addLog(`[Fetch Outage ERROR] Fallito per ${upId}: ${err.message || err}`);
+    throw err;
   }
-
-  // Normalize outage objects to our schema
-  return outageList.map(o => ({
-    outage_id: o.outage_id || o.id || `${upId}_${o.startDate || o.start_date || Date.now()}`,
-    up_id: upId,
-    startDate: o.startDate || o.start_date || o.from_UTC || startDate,
-    endDate: o.endDate || o.end_date || o.to_UTC || endDate,
-    reductionPercentage: o.reductionPercentage || o.reduction_percentage || o.reduction || 0,
-    residualCapacity: o.residualCapacity || o.residual_capacity || 0,
-    notes: o.notes || o.description || ''
-  }));
 }
 
 function generateMockObservations(upId, date, type, tech) {

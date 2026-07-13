@@ -6,7 +6,7 @@ window.onerror = function(message, source, lineno, colno, error) {
 };
 
 import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry } from "./registry.js";
-import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations, saveObservations, saveOutages } from "./db.js";
+import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations, saveObservations, saveOutages, clearClientCaches } from "./db.js";
 import { isSimulatedMode, setSimulatedMode, getAuthHeaders, fetchObservations, fetchOutages, fetchObservationsRange } from "./api.js";
 import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats } from "./ui.js";
 
@@ -1047,22 +1047,14 @@ async function triggerDailyForceRefetch(upId, dateStr) {
     if (!syncResponse.ok) throw new Error(`Backend sync error: ${syncResponse.status}`);
 
     updateSettingsLogs(`[Daily Refetch] Re-sync avviato per ${up.name} in data ${dateStr}. Attendi completamento...`);
+    
+    // Start status polling
+    startSyncStatusPoller();
   } catch (err) {
     updateSettingsLogs(`[Daily Refetch ERROR] Sincronizzazione fallita: ${err.message || err}`);
-  } finally {
     delete state.activeSyncTasks[taskKey];
     state.isSyncRunning = prevSyncRunning; // Restore previous sync state
-    
     if (overlay) overlay.classList.remove("active");
-    
-    // Refresh this cell in the cache
-    if (window.refreshCellStatusCached) {
-      await window.refreshCellStatusCached(upId, dateStr);
-    }
-    
-    if (state.view === "detail" && state.selectedUP === upId) {
-      await renderDeepDivePanel();
-    }
   }
 }
 window.triggerDailyForceRefetchGlobal = triggerDailyForceRefetch;
@@ -1771,9 +1763,12 @@ function startSyncStatusPoller() {
 
       if (wasRunning && !data.isSyncRunning) {
         updateSettingsLogs("Sincronizzazione completata o interrotta dal backend.");
+        clearClientCaches(); // Reset client caches to load new database observations
         printDatabaseDiagnostics();
         if (state.view === "fleet") {
           applyFiltersAndRender();
+        } else if (state.view === "detail") {
+          renderDeepDivePanel();
         }
         clearInterval(syncPollInterval);
         syncPollInterval = null;
