@@ -692,14 +692,22 @@ function navigateToView(viewName) {
     console.warn("[Auth Security] Rejected unauthorized access to Settings.");
     viewName = "fleet";
   }
+
+  // Safe PWA cache bypass: reload page if audit section is missing from HTML cache
+  if (viewName === "audit" && !document.getElementById("audit-view")) {
+    console.warn("Audit view panel not found in DOM. Reloading page to update cache.");
+    window.location.reload();
+    return;
+  }
+
   state.view = viewName;
 
-  document.getElementById("fleet-heatmap-view").classList.add("hidden");
-  document.getElementById("fleet-stats-view").classList.add("hidden");
-  document.getElementById("detail-deepdive-view").classList.add("hidden");
-  document.getElementById("settings-view").classList.add("hidden");
-  document.getElementById("ppa-view").classList.add("hidden");
-  document.getElementById("audit-view").classList.add("hidden");
+  // Hide all view panels safely
+  const views = ["fleet-heatmap-view", "fleet-stats-view", "detail-deepdive-view", "settings-view", "ppa-view", "audit-view"];
+  views.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add("hidden");
+  });
 
   const timelineHeader = document.querySelector(".main-header");
   if (timelineHeader) {
@@ -731,30 +739,31 @@ function navigateToView(viewName) {
     }
   });
 
-  // Show active view panel
+  // Show active view panel safely
+  const activeEl = document.getElementById(`${viewName}-view`);
+  const targetEl = (viewName === "detail") ? document.getElementById("detail-deepdive-view") : activeEl;
+  if (targetEl) {
+    targetEl.classList.remove("hidden");
+  }
+
+  // Run view init handlers
   if (viewName === "fleet") {
     const searchUpSel = document.getElementById("search-up-select");
     if (searchUpSel) searchUpSel.value = "";
-    document.getElementById("fleet-heatmap-view").classList.remove("hidden");
     applyFiltersAndRender();
     if (state.isSyncRunning) {
       startHeatmapAnimation();
     }
   } else if (viewName === "stats") {
-    document.getElementById("fleet-stats-view").classList.remove("hidden");
     applyFiltersAndRender();
   } else if (viewName === "detail") {
-    document.getElementById("detail-deepdive-view").classList.remove("hidden");
     renderDeepDivePanel();
   } else if (viewName === "ppa") {
-    document.getElementById("ppa-view").classList.remove("hidden");
     renderPPAPanel();
   } else if (viewName === "settings") {
-    document.getElementById("settings-view").classList.remove("hidden");
     updateSettingsLogs();
     printDatabaseDiagnostics();
   } else if (viewName === "audit") {
-    document.getElementById("audit-view").classList.remove("hidden");
     applyFiltersAndRender();
   }
 }

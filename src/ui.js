@@ -200,28 +200,37 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
   canvas.style.height = (rowHeight * (numUPs + 1)) + "px";
   ctx.scale(dpr, dpr);
 
-  const drawBadge = (cx, cy, radius, text, fontSize) => {
-    // 1. Draw yellow circle background
-    ctx.fillStyle = "#facc15";
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
-    ctx.fill();
-
-    // 2. Draw black border around circle
+  const drawBadge = (cx, cy, radius, text, fontSize, shape) => {
+    // 1. Draw shape background and black outline
     ctx.strokeStyle = "#000000";
     ctx.lineWidth = 1;
-    ctx.stroke();
 
-    // 3. Draw outlined letter
-    ctx.font = `bold ${fontSize} Arial, Helvetica, sans-serif`;
+    if (shape === "diamond") {
+      // Vibrant Warning Orange Diamond
+      ctx.fillStyle = "#f97316";
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - radius);
+      ctx.lineTo(cx + radius, cy);
+      ctx.lineTo(cx, cy + radius);
+      ctx.lineTo(cx - radius, cy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } else {
+      // Bright Warning Yellow Circle
+      ctx.fillStyle = "#facc15";
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // 2. Draw solid black letter (no stroke outlines to avoid blobs!)
+    ctx.font = `900 ${fontSize} Arial, Helvetica, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = "#e11d48";
+    ctx.fillStyle = "#000000";
     ctx.fillText(text, cx, cy + 0.5);
-    ctx.strokeStyle = "#000000";
-    ctx.lineWidth = 1.2;
-    ctx.lineJoin = "round";
-    ctx.strokeText(text, cx, cy + 0.5);
   };
 
   // Clear background
@@ -402,16 +411,16 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
 
         if (isIncomplete) {
           if (isMeterIncomplete && isScadaIncomplete) {
-            // Draw M and S side-by-side (overlapping slightly)
+            // Draw M (circle) and S (diamond) side-by-side
             const cy = y + rowHeight - 6.5;
-            drawBadge(x + colWidth - 14.5, cy, 4.5, "M", "7.5px");
-            drawBadge(x + colWidth - 6, cy, 4.5, "S", "7.5px");
+            drawBadge(x + colWidth - 14.5, cy, 4.5, "M", "7.5px", "circle");
+            drawBadge(x + colWidth - 6, cy, 4.5, "S", "7.5px", "diamond");
           } else if (isMeterIncomplete) {
-            // Draw M in the corner
-            drawBadge(x + colWidth - 8, y + rowHeight - 8, 6.5, "M", "9px");
+            // Draw M (circle) in the corner
+            drawBadge(x + colWidth - 8, y + rowHeight - 8, 6.5, "M", "9px", "circle");
           } else if (isScadaIncomplete) {
-            // Draw S in the corner
-            drawBadge(x + colWidth - 8, y + rowHeight - 8, 6.5, "S", "9px");
+            // Draw S (diamond) in the corner
+            drawBadge(x + colWidth - 8, y + rowHeight - 8, 6.5, "S", "9px", "diamond");
           }
         }
       }
