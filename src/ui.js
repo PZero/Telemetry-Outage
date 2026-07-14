@@ -377,25 +377,32 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
         }
 
         if (isIncomplete) {
-          // Draw a high-contrast white circular background in the bottom-right corner
-          const cx = x + colWidth - 6;
-          const cy = y + rowHeight - 6;
+          // Draw a high-contrast white circular background in the bottom-right corner (enlarged)
+          const cx = x + colWidth - 8;
+          const cy = y + rowHeight - 8;
           ctx.fillStyle = "#ffffff";
           ctx.beginPath();
-          ctx.arc(cx, cy, 4.5, 0, 2 * Math.PI);
+          ctx.arc(cx, cy, 6.5, 0, 2 * Math.PI);
           ctx.fill();
 
-          // Draw sharp red lightning bolt inside the circle
-          ctx.fillStyle = "#ef4444"; // Vivid red
+          // Draw sharp red lightning bolt inside the circle (enlarged & outlined)
           ctx.beginPath();
-          ctx.moveTo(cx + 1, cy - 3.5);
-          ctx.lineTo(cx - 1.5, cy + 0.5);
-          ctx.lineTo(cx, cy + 0.5);
-          ctx.lineTo(cx - 2, cy + 3.5);
-          ctx.lineTo(cx + 2, cy - 0.5);
-          ctx.lineTo(cx + 0.5, cy - 0.5);
+          ctx.moveTo(cx + 1.5, cy - 5);
+          ctx.lineTo(cx - 2, cy + 1);
+          ctx.lineTo(cx, cy + 1);
+          ctx.lineTo(cx - 3, cy + 5.5);
+          ctx.lineTo(cx + 3, cy - 1);
+          ctx.lineTo(cx + 1, cy - 1);
           ctx.closePath();
+          
+          ctx.fillStyle = "#ef4444"; // Vivid red
           ctx.fill();
+
+          // Dark outline around the bolt to make it pop and feel bold/calcata
+          ctx.strokeStyle = "#000000";
+          ctx.lineWidth = 1;
+          ctx.lineJoin = "round";
+          ctx.stroke();
         }
       }
     }
