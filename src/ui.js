@@ -2732,7 +2732,15 @@ export async function renderAuditReportPanel(container, upList, dateRange) {
       return formattedParts.join(", ");
     };
 
-    let html = "";
+    const now = new Date();
+    const nowItalianDate = formatItalianDate(now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, '0') + "-" + String(now.getDate()).padStart(2, '0'));
+    const nowTime = now.toLocaleTimeString('it-IT');
+
+    let html = `
+      <div class="audit-generation-timestamp" style="font-size: 0.85rem; font-weight: 600; color: #60a5fa; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.15); padding: 10px 16px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; gap: 8px;">
+        <span>📋</span> Audit generato il <strong>${nowItalianDate}</strong> alle ore <strong>${nowTime}</strong>.
+      </div>
+    `;
     
     // Add printable header block (hidden on screen, visible in PDF)
     const startDateFormatted = formatItalianDate(dateRange[0]);

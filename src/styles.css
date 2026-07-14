@@ -1015,3 +1015,13 @@ main {
   font-weight: 500 !important;
   display: inline-block !important;
 }
+
+.pdf-export-mode .audit-generation-timestamp {
+  background: #f8fafc !important;
+  color: #1e293b !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+.pdf-export-mode .audit-generation-timestamp strong {
+  color: #1e3a8a !important;
+}
