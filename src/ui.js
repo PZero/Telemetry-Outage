@@ -377,17 +377,23 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
         }
 
         if (isIncomplete) {
-          // Draw tiny red lightning bolt icon in the bottom-right corner
-          const lx = x + colWidth - 8;
-          const ly = y + rowHeight - 11;
-          ctx.fillStyle = "#ef4444"; // Red saetta
+          // Draw a high-contrast white circular background in the bottom-right corner
+          const cx = x + colWidth - 6;
+          const cy = y + rowHeight - 6;
+          ctx.fillStyle = "#ffffff";
           ctx.beginPath();
-          ctx.moveTo(lx + 3, ly);
-          ctx.lineTo(lx + 1, ly + 4);
-          ctx.lineTo(lx + 2.5, ly + 4);
-          ctx.lineTo(lx, ly + 9);
-          ctx.lineTo(lx + 4, ly + 3.5);
-          ctx.lineTo(lx + 2.5, ly + 3.5);
+          ctx.arc(cx, cy, 4.5, 0, 2 * Math.PI);
+          ctx.fill();
+
+          // Draw sharp red lightning bolt inside the circle
+          ctx.fillStyle = "#ef4444"; // Vivid red
+          ctx.beginPath();
+          ctx.moveTo(cx + 1, cy - 3.5);
+          ctx.lineTo(cx - 1.5, cy + 0.5);
+          ctx.lineTo(cx, cy + 0.5);
+          ctx.lineTo(cx - 2, cy + 3.5);
+          ctx.lineTo(cx + 2, cy - 0.5);
+          ctx.lineTo(cx + 0.5, cy - 0.5);
           ctx.closePath();
           ctx.fill();
         }
