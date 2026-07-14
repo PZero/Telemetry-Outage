@@ -1,18 +1,14 @@
 // Telemetry & Outage Integrity PWA Service Worker (sw.js)
 // Handles background processing queue, Azure rate limiting (2s delay), and IndexedDB operations.
 
-const CACHE_NAME = "up-integrity-cache-v94";
+const CACHE_NAME = "up-integrity-cache-v95";
 const ASSETS = [
   "./",
   "./index.html",
-  "./manifest.json",
+  "./assets/manifest.json",
   "./assets/logo.svg",
-  "./src/main.js",
-  "./src/db.js",
-  "./src/api.js",
-  "./src/ui.js",
-  "./src/registry.js",
-  "./src/styles.css"
+  "./assets/index.js",
+  "./assets/index.css"
 ];
 
 // Seedable pseudo-random generator (copied for self-containment in SW worker thread)
