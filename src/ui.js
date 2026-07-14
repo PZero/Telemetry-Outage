@@ -2657,3 +2657,132 @@ function drawFeasibilityGauge(canvas, percentage, label, color, alpha) {
   ctx.textBaseline = "middle";
   ctx.fillText(`${Math.round(percentage * alpha)}%`, centerX, centerY);
 }
+
+export async function renderAuditReportPanel(container, upList, dateRange) {
+  if (!container) return;
+
+  if (upList.length === 0 || dateRange.length === 0) {
+    container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 40px;">
+      Nessuna UP caricata o intervallo temporale vuoto.
+    </div>`;
+    return;
+  }
+
+  container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 40px;">
+    🔍 Analisi delle letture ed elaborazione del report in corso...
+  </div>`;
+
+  try {
+    // 1. Preload outages and observations in bulk for performance
+    await preloadOutagesBulk();
+    await preloadObservationsBulk(upList, dateRange);
+
+    const MESI = ["Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno", "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"];
+    const formatItalianDate = (dateStr) => {
+      const parts = dateStr.split("-");
+      if (parts.length < 3) return dateStr;
+      const day = parseInt(parts[2], 10);
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return `${day} ${MESI[monthIdx]}`;
+    };
+
+    let html = "";
+    
+    // Add printable header block (hidden on screen, visible in PDF)
+    const startDateFormatted = formatItalianDate(dateRange[0]);
+    const endDateFormatted = formatItalianDate(dateRange[dateRange.length - 1]);
+    html += `
+      <div class="pdf-header-only" style="display: none; border-bottom: 3px solid #1e3a8a; padding-bottom: 12px; margin-bottom: 24px;">
+        <h1 style="color: #1e3a8a; font-size: 1.8rem; margin: 0; font-family: sans-serif;">REPORT AUDIT ANOMALIE TELEMETRIE</h1>
+        <p style="color: #475569; font-size: 0.85rem; margin: 4px 0 0 0; font-weight: 500;">
+          Generato il: ${new Date().toLocaleDateString('it-IT')} | Periodo: dal ${startDateFormatted} al ${endDateFormatted}
+        </p>
+      </div>
+    `;
+
+    for (const up of upList) {
+      const noScada = up.scada_disabled === 1 || up.scada_disabled === true;
+      const ppaName = up.ppa_partner || "Nessuno";
+
+      const bothMissing = [];
+      const meterMissing = [];
+      const scadaMissing = [];
+
+      // Check integrity for all days in parallel
+      const statusList = await Promise.all(dateRange.map(dateStr => classifyDayIntegrity(up, dateStr)));
+
+      dateRange.forEach((dateStr, idx) => {
+        const statusObj = statusList[idx];
+        if (!statusObj) return;
+
+        const isMeterIncomplete = statusObj.meterValids < 96;
+        const isScadaIncomplete = !noScada && (statusObj.scadaValids < statusObj.scadaSteps);
+
+        const dateItalian = formatItalianDate(dateStr);
+
+        if (isMeterIncomplete && isScadaIncomplete) {
+          bothMissing.push(dateItalian);
+        } else if (isMeterIncomplete) {
+          meterMissing.push(dateItalian);
+        } else if (isScadaIncomplete) {
+          scadaMissing.push(dateItalian);
+        }
+      });
+
+      const hasAnomalies = bothMissing.length > 0 || meterMissing.length > 0 || scadaMissing.length > 0;
+
+      html += `
+        <div class="audit-up-row" style="margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--panel-border);">
+          <h3 style="margin: 0 0 10px 0; font-size: 0.95rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; width: 100%;">
+            <span style="color: var(--text-main); font-weight: 700;">UP: ${up.name}</span>
+            <span class="ppa-tag-badge" style="font-size: 0.65rem; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.25); color: #60a5fa; padding: 2px 8px; border-radius: 4px;">PPA: ${ppaName}</span>
+          </h3>
+      `;
+
+      if (!hasAnomalies) {
+        html += `
+          <div class="success-badge" style="font-size: 0.72rem; color: #34d399; background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); padding: 6px 12px; border-radius: 6px; display: inline-block;">
+            ✅ Nessuna anomalia rilevata nel periodo selezionato.
+          </div>
+        `;
+      } else {
+        html += `<ul class="anomaly-list" style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px;">`;
+
+        if (bothMissing.length > 0) {
+          html += `
+            <li class="anomaly-item" style="font-size: 0.76rem; color: var(--text-muted);">
+              <span style="color: #ef4444; font-weight: 700;">❌ Entrambi i profili assenti/incompleti:</span> ${bothMissing.join(", ")}
+            </li>
+          `;
+        }
+
+        if (scadaMissing.length > 0) {
+          html += `
+            <li class="anomaly-item" style="font-size: 0.76rem; color: var(--text-muted);">
+              <span style="color: #f59e0b; font-weight: 700;">⚡ Dati SCADA incompleti:</span> ${scadaMissing.join(", ")}
+            </li>
+          `;
+        }
+
+        if (meterMissing.length > 0) {
+          html += `
+            <li class="anomaly-item" style="font-size: 0.76rem; color: var(--text-muted);">
+              <span style="color: #f87171; font-weight: 700;">📊 Dati Meter incompleti:</span> ${meterMissing.join(", ")}
+            </li>
+          `;
+        }
+
+        html += `</ul>`;
+      }
+
+      html += `</div>`;
+    }
+
+    container.innerHTML = html;
+  } catch (err) {
+    console.error("[Audit Report Error]", err);
+    container.innerHTML = `<div style="text-align: center; color: var(--accent-red); padding: 40px;">
+      Si è verificato un errore nel calcolo dell'audit: ${err.message || err}
+    </div>`;
+  }
+}

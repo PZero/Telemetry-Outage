@@ -8,7 +8,7 @@ window.onerror = function(message, source, lineno, colno, error) {
 import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry } from "./registry.js";
 import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations, saveObservations, saveOutages, clearClientCaches } from "./db.js";
 import { isSimulatedMode, setSimulatedMode, getAuthHeaders, fetchObservations, fetchOutages, fetchObservationsRange } from "./api.js";
-import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats } from "./ui.js";
+import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats, renderAuditReportPanel } from "./ui.js";
 
 // Global Application State
 const state = {
@@ -606,7 +606,7 @@ async function applyFiltersAndRender() {
     console.log("[Render] Skipping render - User not authenticated.");
     return;
   }
-  if (state.view !== "fleet" && state.view !== "stats") return;
+  if (state.view !== "fleet" && state.view !== "stats" && state.view !== "audit") return;
 
   const canvas = document.getElementById("heatmap-canvas");
   if (state.view === "fleet" && !canvas) return;
@@ -666,6 +666,11 @@ async function applyFiltersAndRender() {
     });
     const matrixData = await Promise.all(allRowsPromises);
     renderFleetStats(filteredUPs, range, matrixData);
+  } else if (state.view === "audit") {
+    const container = document.getElementById("audit-report-container");
+    if (container) {
+      renderAuditReportPanel(container, filteredUPs, range);
+    }
   }
 }
 
@@ -694,16 +699,18 @@ function navigateToView(viewName) {
   document.getElementById("detail-deepdive-view").classList.add("hidden");
   document.getElementById("settings-view").classList.add("hidden");
   document.getElementById("ppa-view").classList.add("hidden");
+  document.getElementById("audit-view").classList.add("hidden");
 
   const timelineHeader = document.querySelector(".main-header");
   if (timelineHeader) {
-    timelineHeader.style.display = (viewName === "fleet" || viewName === "stats") ? "flex" : "none";
+    timelineHeader.style.display = (viewName === "fleet" || viewName === "stats" || viewName === "audit") ? "flex" : "none";
   }
 
   // Update top navbar active tab styling
   const tabs = {
     fleet: document.getElementById("nav-fleet-btn"),
     stats: document.getElementById("nav-stats-btn"),
+    audit: document.getElementById("nav-audit-btn"),
     ppa: document.getElementById("nav-ppa-btn"),
     settings: document.getElementById("nav-settings-btn")
   };
@@ -746,6 +753,9 @@ function navigateToView(viewName) {
     document.getElementById("settings-view").classList.remove("hidden");
     updateSettingsLogs();
     printDatabaseDiagnostics();
+  } else if (viewName === "audit") {
+    document.getElementById("audit-view").classList.remove("hidden");
+    applyFiltersAndRender();
   }
 }
 window.navigateToView = navigateToView;
@@ -764,6 +774,9 @@ function setupViewRouting() {
   const statsBtn = document.getElementById("nav-stats-btn");
   if (statsBtn) statsBtn.onclick = () => navigateToView("stats");
 
+  const auditBtn = document.getElementById("nav-audit-btn");
+  if (auditBtn) auditBtn.onclick = () => navigateToView("audit");
+
   const ppaBtn = document.getElementById("nav-ppa-btn");
   if (ppaBtn) ppaBtn.onclick = () => navigateToView("ppa");
 
@@ -772,6 +785,38 @@ function setupViewRouting() {
 
   const backBtn = document.getElementById("detail-back-btn");
   if (backBtn) backBtn.onclick = () => navigateToView("fleet");
+
+  const downloadPdfBtn = document.getElementById("download-audit-pdf-btn");
+  if (downloadPdfBtn) {
+    downloadPdfBtn.onclick = () => {
+      const element = document.getElementById("audit-report-container");
+      if (!element) return;
+      
+      // Temporarily add print class for light theme formatting
+      element.classList.add("pdf-export-mode");
+      
+      const opt = {
+        margin:       15,
+        filename:     `Report_Audit_Integrita_${new Date().toISOString().split('T')[0]}.pdf`,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+      };
+
+      if (window.html2pdf) {
+        window.html2pdf().set(opt).from(element).save().then(() => {
+          element.classList.remove("pdf-export-mode");
+        }).catch((err) => {
+          console.error("PDF generation failed:", err);
+          element.classList.remove("pdf-export-mode");
+          alert("Errore nella generazione del file PDF.");
+        });
+      } else {
+        alert("Libreria di esportazione PDF non ancora caricata. Riprova tra qualche istante.");
+        element.classList.remove("pdf-export-mode");
+      }
+    };
+  }
 
   // Setup Stats Subtabs
   const tabQualita = document.getElementById("stats-tab-qualita");
