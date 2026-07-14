@@ -256,6 +256,9 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
       const status = statusObj ? statusObj.status : null;
       const isDelay = statusObj ? statusObj.importedInDelay : false;
       const isApiError = statusObj ? statusObj.apiError : false;
+      const isMeterIncomplete = statusObj ? (statusObj.meterValids < 96) : false;
+      const isScadaIncomplete = (!noScada && statusObj) ? (statusObj.scadaValids < statusObj.scadaSteps) : false;
+      const isIncomplete = isMeterIncomplete || isScadaIncomplete;
       const x = labelWidth + c * colWidth;
 
       const taskKey = `${up.id}|${dateStr}`;
@@ -369,6 +372,22 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
           ctx.moveTo(x + 2, y + rowHeight - 2);
           ctx.lineTo(x + 7, y + rowHeight - 2);
           ctx.lineTo(x + 4.5, y + rowHeight - 7);
+          ctx.closePath();
+          ctx.fill();
+        }
+
+        if (isIncomplete) {
+          // Draw tiny red lightning bolt icon in the bottom-right corner
+          const lx = x + colWidth - 8;
+          const ly = y + rowHeight - 11;
+          ctx.fillStyle = "#ef4444"; // Red saetta
+          ctx.beginPath();
+          ctx.moveTo(lx + 3, ly);
+          ctx.lineTo(lx + 1, ly + 4);
+          ctx.lineTo(lx + 2.5, ly + 4);
+          ctx.lineTo(lx, ly + 9);
+          ctx.lineTo(lx + 4, ly + 3.5);
+          ctx.lineTo(lx + 2.5, ly + 3.5);
           ctx.closePath();
           ctx.fill();
         }
