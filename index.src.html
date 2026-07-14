@@ -28,7 +28,7 @@
         alert(`[Loader Error]\nImpossibile caricare lo script: ${event.target.src}\nVerificare se ci sono estensioni che lo bloccano o effettuare un hard refresh.`);
       }
     }, true);
-    window.APP_VERSION = "v97";
+    window.APP_VERSION = "v98";
     // Diagnostic: verify app boots correctly after DOM is ready
     document.addEventListener('DOMContentLoaded', function() {
       setTimeout(function() {
@@ -149,7 +149,7 @@
           <span id="queue-status-desc" class="sidebar-hide-on-collapse" style="font-size: 0.58rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">Caricamento...</span>
         </div>
         <div class="sidebar-hide-on-collapse" style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 2px;">
-          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v97</span>
+          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v98</span>
         </div>
         <!-- Google User profile widget -->
         <div id="user-profile-widget" style="display: none; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); text-align: left;">
@@ -966,6 +966,6 @@ Attiva un'acquisizione storica per visualizzare il registro delle richieste sequ
   <div id="chart-tooltip" class="chart-tooltip" style="position: absolute; display: none; background: rgba(13, 16, 27, 0.95); border: 1px solid var(--panel-border); border-radius: 8px; padding: 12px; color: var(--text-main); font-size: 0.8rem; box-shadow: var(--shadow-xl); pointer-events: none; z-index: 1000; backdrop-filter: blur(8px); min-width: 160px; font-family: var(--font-sans); border-left: 3px solid #3b82f6;"></div>
 
   <!-- App Entry Point scripts -->
-  <script type="module" src="./src/main.js?v=97"></script>
+  <script type="module" src="./src/main.js?v=98"></script>
 </body>
 </html>

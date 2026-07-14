@@ -956,6 +956,9 @@ main {
 
 /* Print / PDF Export Styles for Audit Report */
 .pdf-export-mode {
+  --text-main: #0f172a !important;
+  --text-muted: #334155 !important;
+  --panel-border: #cbd5e1 !important;
   background: #ffffff !important;
   color: #0f172a !important;
   padding: 40px !important;

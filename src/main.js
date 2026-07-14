@@ -251,6 +251,9 @@ async function registerServiceWorker() {
       state.swRegistration = reg;
       console.log("[SW] Service Worker registered in scope:", reg.scope);
 
+      // Force immediate update check to bypass stale cache-first policies
+      reg.update();
+
       // Auto-reload on updates to bypass cache-first locks immediately
       reg.addEventListener("updatefound", () => {
         const newWorker = reg.installing;
