@@ -377,20 +377,20 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
         }
 
         if (isIncomplete) {
-          // Draw a very prominent high-contrast white circle (diameter 15px) in the bottom-right corner
+          // Draw a very prominent high-contrast warning-yellow circle (diameter 15px) in the bottom-right corner
           const cx = x + colWidth - 9;
           const cy = y + rowHeight - 9;
-          ctx.fillStyle = "#ffffff";
+          ctx.fillStyle = "#facc15"; // Bright warning yellow
           ctx.beginPath();
           ctx.arc(cx, cy, 7.5, 0, 2 * Math.PI);
           ctx.fill();
           
-          // Draw a black border around the white circle to define it against green/orange
+          // Draw a black border around the yellow circle to define it clearly
           ctx.strokeStyle = "#000000";
           ctx.lineWidth = 1;
           ctx.stroke();
 
-          // Draw a huge red lightning bolt inside the circle (enlarged & outlined)
+          // Draw a huge crimson red lightning bolt inside the circle (enlarged & outlined)
           ctx.beginPath();
           ctx.moveTo(cx + 2.5, cy - 6);
           ctx.lineTo(cx - 3, cy + 1.5);
@@ -400,10 +400,10 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
           ctx.lineTo(cx + 1, cy - 1.5);
           ctx.closePath();
           
-          ctx.fillStyle = "#dc2626"; // Vivid darker red for superior contrast
+          ctx.fillStyle = "#e11d48"; // Vivid crimson red
           ctx.fill();
 
-          // Bold black outline around the bolt itself to make it pop
+          // Bold black outline around the bolt itself to make it pop out
           ctx.strokeStyle = "#000000";
           ctx.lineWidth = 1.2;
           ctx.lineJoin = "round";
