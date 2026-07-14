@@ -1,18 +1,14 @@
 // Telemetry & Outage Integrity PWA Service Worker (sw.js)
 // Handles background processing queue, Azure rate limiting (2s delay), and IndexedDB operations.
 
-const CACHE_NAME = "up-integrity-cache-v80";
+const CACHE_NAME = "up-integrity-cache-v95";
 const ASSETS = [
   "./",
   "./index.html",
-  "./manifest.json",
+  "./assets/manifest.json",
   "./assets/logo.svg",
-  "./src/main.js",
-  "./src/db.js",
-  "./src/api.js",
-  "./src/ui.js",
-  "./src/registry.js",
-  "./src/styles.css"
+  "./assets/index.js",
+  "./assets/index.css"
 ];
 
 // Seedable pseudo-random generator (copied for self-containment in SW worker thread)
@@ -27,6 +23,7 @@ function seedRandom(upId, dateStr, extra = "") {
 
 // Active Task State
 let currentActiveTask = null;
+let isProcessingQueue = false;
 
 // IndexedDB Helper inside Service Worker
 function openDatabase() {
@@ -173,7 +170,8 @@ function saveOutagesToDB(db, outages) {
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS);
+      const requests = ASSETS.map(url => new Request(url, { cache: "reload" }));
+      return cache.addAll(requests);
     }).then(() => self.skipWaiting())
   );
 });
