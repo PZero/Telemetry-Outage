@@ -2695,6 +2695,43 @@ export async function renderAuditReportPanel(container, upList, dateRange) {
       return `${day} ${MESI[monthIdx]}`;
     };
 
+    // Helper to compress consecutive days (> 3 consecutive)
+    const compressDates = (daysList, formatter) => {
+      if (daysList.length === 0) return "";
+      
+      const groups = [];
+      let currentGroup = [daysList[0]];
+      
+      for (let i = 1; i < daysList.length; i++) {
+        const prevDate = new Date(daysList[i - 1]);
+        const currDate = new Date(daysList[i]);
+        const diffDays = Math.round((currDate - prevDate) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays === 1) {
+          currentGroup.push(daysList[i]);
+        } else {
+          groups.push(currentGroup);
+          currentGroup = [daysList[i]];
+        }
+      }
+      groups.push(currentGroup);
+      
+      const formattedParts = [];
+      groups.forEach(group => {
+        if (group.length > 3) {
+          const startFormatted = formatter(group[0]);
+          const endFormatted = formatter(group[group.length - 1]);
+          formattedParts.push(`dal ${startFormatted} al ${endFormatted}`);
+        } else {
+          group.forEach(d => {
+            formattedParts.push(formatter(d));
+          });
+        }
+      });
+      
+      return formattedParts.join(", ");
+    };
+
     let html = "";
     
     // Add printable header block (hidden on screen, visible in PDF)
@@ -2711,7 +2748,7 @@ export async function renderAuditReportPanel(container, upList, dateRange) {
 
     for (const up of upList) {
       const noScada = up.scada_disabled === 1 || up.scada_disabled === true;
-      const ppaName = up.ppa_partner || "Nessuno";
+      const ppaName = up.ppaTag || "Nessuno";
 
       const bothMissing = [];
       const meterMissing = [];
@@ -2727,14 +2764,12 @@ export async function renderAuditReportPanel(container, upList, dateRange) {
         const isMeterIncomplete = statusObj.meterValids < 96;
         const isScadaIncomplete = !noScada && (statusObj.scadaValids < statusObj.scadaSteps);
 
-        const dateItalian = formatItalianDate(dateStr);
-
         if (isMeterIncomplete && isScadaIncomplete) {
-          bothMissing.push(dateItalian);
+          bothMissing.push(dateStr);
         } else if (isMeterIncomplete) {
-          meterMissing.push(dateItalian);
+          meterMissing.push(dateStr);
         } else if (isScadaIncomplete) {
-          scadaMissing.push(dateItalian);
+          scadaMissing.push(dateStr);
         }
       });
 
@@ -2758,25 +2793,28 @@ export async function renderAuditReportPanel(container, upList, dateRange) {
         html += `<ul class="anomaly-list" style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px;">`;
 
         if (bothMissing.length > 0) {
+          const compressedBoth = compressDates(bothMissing, formatItalianDate);
           html += `
             <li class="anomaly-item" style="font-size: 0.76rem; color: var(--text-muted);">
-              <span style="color: #ef4444; font-weight: 700;">❌ Entrambi i profili assenti/incompleti:</span> ${bothMissing.join(", ")}
+              <span style="color: #ef4444; font-weight: 700;">❌ Entrambi i profili assenti/incompleti:</span> ${compressedBoth}
             </li>
           `;
         }
 
         if (scadaMissing.length > 0) {
+          const compressedScada = compressDates(scadaMissing, formatItalianDate);
           html += `
             <li class="anomaly-item" style="font-size: 0.76rem; color: var(--text-muted);">
-              <span style="color: #f59e0b; font-weight: 700;">⚡ Dati SCADA incompleti:</span> ${scadaMissing.join(", ")}
+              <span style="color: #f59e0b; font-weight: 700;">⚡ Dati SCADA incompleti:</span> ${compressedScada}
             </li>
           `;
         }
 
         if (meterMissing.length > 0) {
+          const compressedMeter = compressDates(meterMissing, formatItalianDate);
           html += `
             <li class="anomaly-item" style="font-size: 0.76rem; color: var(--text-muted);">
-              <span style="color: #f87171; font-weight: 700;">📊 Dati Meter incompleti:</span> ${meterMissing.join(", ")}
+              <span style="color: #f87171; font-weight: 700;">📊 Dati Meter incompleti:</span> ${compressedMeter}
             </li>
           `;
         }
