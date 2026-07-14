@@ -605,75 +605,79 @@ function setupFilters() {
  * Filters the flotta list and triggers heatmap redraw.
  */
 async function applyFiltersAndRender() {
-  if (!state.user) {
-    console.log("[Render] Skipping render - User not authenticated.");
-    return;
-  }
-  if (state.view !== "fleet" && state.view !== "stats" && state.view !== "audit") return;
-
-  const canvas = document.getElementById("heatmap-canvas");
-  if (state.view === "fleet" && !canvas) return;
-
-  // Filter by basic parameters
-  let filteredUPs = UP_REGISTRY.filter(up => {
-    if (up.tech === "Wind" && !state.filters.techWind) return false;
-    if (up.tech === "Solar" && !state.filters.techSolar) return false;
-    if (state.filters.region !== "All" && up.region !== state.filters.region) return false;
-    
-    // Filter by PPA Tag
-    if (state.filters.ppaTag && state.filters.ppaTag !== "All") {
-      if (state.filters.ppaTag === "None") {
-        if (up.ppaTag) return false;
-      } else {
-        if (up.ppaTag !== state.filters.ppaTag) return false;
-      }
+  try {
+    if (!state.user) {
+      console.log("[Render] Skipping render - User not authenticated.");
+      return;
     }
+    if (state.view !== "fleet" && state.view !== "stats" && state.view !== "audit") return;
 
-    // Filter by specific selected UPs
-    if (state.filters.selectedUPs && state.filters.selectedUPs.size > 0) {
-      if (!state.filters.selectedUPs.has(up.id)) return false;
-    }
-    return true;
-  });
+    const canvas = document.getElementById("heatmap-canvas");
+    if (state.view === "fleet" && !canvas) return;
 
-  const range = getActiveDateRange();
-
-  // Apply high-performance dynamic anomaly filters
-  if (state.filters.onlyGaps || state.filters.discrepancy) {
-    const statusPromises = filteredUPs.map(async (up) => {
-      for (const dateStr of range) {
-        const integrityResult = await classifyDayIntegrity(up, dateStr);
-        const integrity = integrityResult.status;
-        
-        if (state.filters.onlyGaps && integrity === "red") {
-          return { up, match: true };
-        }
-        if (state.filters.discrepancy && integrity === "orange") {
-          return { up, match: true };
+    // Filter by basic parameters
+    let filteredUPs = UP_REGISTRY.filter(up => {
+      if (up.tech === "Wind" && !state.filters.techWind) return false;
+      if (up.tech === "Solar" && !state.filters.techSolar) return false;
+      if (state.filters.region !== "All" && up.region !== state.filters.region) return false;
+      
+      // Filter by PPA Tag
+      if (state.filters.ppaTag && state.filters.ppaTag !== "All") {
+        if (state.filters.ppaTag === "None") {
+          if (up.ppaTag) return false;
+        } else {
+          if (up.ppaTag !== state.filters.ppaTag) return false;
         }
       }
-      return { up, match: false };
+
+      // Filter by specific selected UPs
+      if (state.filters.selectedUPs && state.filters.selectedUPs.size > 0) {
+        if (!state.filters.selectedUPs.has(up.id)) return false;
+      }
+      return true;
     });
 
-    const results = await Promise.all(statusPromises);
-    filteredUPs = results.filter(r => r.match).map(r => r.up);
-  }
+    const range = getActiveDateRange();
 
-  // Draw Heatmap
-  if (state.view === "fleet") {
-    renderFleetHeatmap(canvas, filteredUPs, range, handleHeatmapCellClick);
-  } else if (state.view === "stats") {
-    // Generate matrixData asynchronously to run the stats rendering
-    const allRowsPromises = filteredUPs.map(async (up) => {
-      return await Promise.all(range.map(dateStr => classifyDayIntegrity(up, dateStr)));
-    });
-    const matrixData = await Promise.all(allRowsPromises);
-    renderFleetStats(filteredUPs, range, matrixData);
-  } else if (state.view === "audit") {
-    const container = document.getElementById("audit-report-container");
-    if (container) {
-      renderAuditReportPanel(container, filteredUPs, range);
+    // Apply high-performance dynamic anomaly filters
+    if (state.filters.onlyGaps || state.filters.discrepancy) {
+      const statusPromises = filteredUPs.map(async (up) => {
+        for (const dateStr of range) {
+          const integrityResult = await classifyDayIntegrity(up, dateStr);
+          const integrity = integrityResult.status;
+          
+          if (state.filters.onlyGaps && integrity === "red") {
+            return { up, match: true };
+          }
+          if (state.filters.discrepancy && integrity === "orange") {
+            return { up, match: true };
+          }
+        }
+        return { up, match: false };
+      });
+
+      const results = await Promise.all(statusPromises);
+      filteredUPs = results.filter(r => r.match).map(r => r.up);
     }
+
+    // Draw Heatmap
+    if (state.view === "fleet") {
+      await renderFleetHeatmap(canvas, filteredUPs, range, handleHeatmapCellClick);
+    } else if (state.view === "stats") {
+      // Generate matrixData asynchronously to run the stats rendering
+      const allRowsPromises = filteredUPs.map(async (up) => {
+        return await Promise.all(range.map(dateStr => classifyDayIntegrity(up, dateStr)));
+      });
+      const matrixData = await Promise.all(allRowsPromises);
+      renderFleetStats(filteredUPs, range, matrixData);
+    } else if (state.view === "audit") {
+      const container = document.getElementById("audit-report-container");
+      if (container) {
+        renderAuditReportPanel(container, filteredUPs, range);
+      }
+    }
+  } catch (err) {
+    console.error("[Render Error] critical error in applyFiltersAndRender:", err);
   }
 }
 

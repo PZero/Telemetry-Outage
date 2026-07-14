@@ -141,42 +141,54 @@ window.refreshCellStatusCached = refreshCellStatusCached;
  * LEVEL 1: Render Fleet Heatmap Matrix on HTML5 Canvas
  */
 export async function renderFleetHeatmap(canvas, upList, dateRange, onCellClick) {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
+  try {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-  const numUPs = upList.length;
-  const numDays = dateRange.length;
+    const numUPs = upList.length;
+    const numDays = dateRange.length;
 
-  if (numUPs === 0 || numDays === 0) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#9ca3af";
-    ctx.font = "14px Outfit";
-    ctx.fillText("Nessuna UP corrispondente ai filtri selezionati.", 20, 40);
-    return;
+    if (numUPs === 0 || numDays === 0) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#9ca3af";
+      ctx.font = "14px Outfit";
+      ctx.fillText("Nessuna UP corrispondente ai filtri selezionati.", 20, 40);
+      return;
+    }
+
+    // Pre-load all database records in bulk to populate local memory caches (reduces network queries from 9000 to 2)
+    if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Avvio precaricamento bulk per ${numUPs} UP (${numDays} giorni)...`);
+    await preloadOutagesBulk();
+    if (dateRange.length > 0) {
+      await preloadObservationsBulk(upList, dateRange);
+    }
+    if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Precaricamento dati completato. Calcolo integrità...`);
+
+    // Load status grid concurrently from local cache
+    const allRowsPromises = upList.map(async (up) => {
+      return await Promise.all(dateRange.map(dateStr => classifyDayIntegrity(up, dateStr)));
+    });
+    const matrixData = await Promise.all(allRowsPromises);
+
+    cachedCanvas = canvas;
+    cachedUpList = upList;
+    cachedDateRange = dateRange;
+    cachedMatrixData = matrixData;
+    cachedOnCellClick = onCellClick;
+
+    drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellClick);
+    if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Heatmap flotta renderizzata con successo.`);
+  } catch (err) {
+    console.error("[UI] renderFleetHeatmap failed:", err);
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = "#0c101b";
+      ctx.fillRect(0, 0, canvas.width || 800, canvas.height || 600);
+      ctx.fillStyle = "#f87171";
+      ctx.font = "bold 14px Arial";
+      ctx.fillText(`Errore di rendering: ${err.message}`, 20, 40);
+    }
   }
-
-  // Pre-load all database records in bulk to populate local memory caches (reduces network queries from 9000 to 2)
-  if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Avvio precaricamento bulk per ${numUPs} UP (${numDays} giorni)...`);
-  await preloadOutagesBulk();
-  if (dateRange.length > 0) {
-    await preloadObservationsBulk(upList, dateRange);
-  }
-  if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Precaricamento dati completato. Calcolo integrità...`);
-
-  // Load status grid concurrently from local cache
-  const allRowsPromises = upList.map(async (up) => {
-    return await Promise.all(dateRange.map(dateStr => classifyDayIntegrity(up, dateStr)));
-  });
-  const matrixData = await Promise.all(allRowsPromises);
-
-  cachedCanvas = canvas;
-  cachedUpList = upList;
-  cachedDateRange = dateRange;
-  cachedMatrixData = matrixData;
-  cachedOnCellClick = onCellClick;
-
-  drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellClick);
-  if (window.updateSettingsLogs) window.updateSettingsLogs(`[UI] Heatmap flotta renderizzata con successo.`);
 }
 
 export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellClick) {
