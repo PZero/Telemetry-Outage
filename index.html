@@ -15,6 +15,9 @@
   
   <!-- Google Identity Services (OAuth 2.0) -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
+  
+  <!-- html2pdf.js CDN for PDF export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script>
     window.onerror = function(message, source, lineno, colno, error) {
       alert(`[Early Error Boundary]\n${message}\nFile: ${source}\nRiga: ${lineno}:${colno}`);
@@ -24,7 +27,7 @@
         alert(`[Loader Error]\nImpossibile caricare lo script: ${event.target.src}\nVerificare se ci sono estensioni che lo bloccano o effettuare un hard refresh.`);
       }
     }, true);
-    window.APP_VERSION = "v92";
+    window.APP_VERSION = "v93";
     // Diagnostic: verify app boots correctly after DOM is ready
     document.addEventListener('DOMContentLoaded', function() {
       setTimeout(function() {
@@ -120,6 +123,9 @@
           <button id="nav-stats-btn" onclick="window.navigateToView ? window.navigateToView('stats') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
             <span></span> <span class="sidebar-hide-on-collapse">Analisi & Statistiche</span>
           </button>
+          <button id="nav-audit-btn" onclick="window.navigateToView ? window.navigateToView('audit') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
+            <span>📋</span> <span class="sidebar-hide-on-collapse">Report Audit</span>
+          </button>
           <button id="nav-ppa-btn" onclick="window.navigateToView ? window.navigateToView('ppa') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
             <span></span> <span class="sidebar-hide-on-collapse">Gestione PPA</span>
           </button>
@@ -144,7 +150,7 @@
           <span id="queue-status-desc" class="sidebar-hide-on-collapse" style="font-size: 0.58rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">Caricamento...</span>
         </div>
         <div class="sidebar-hide-on-collapse" style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 2px;">
-          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v92</span>
+          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v93</span>
         </div>
         <!-- Google User profile widget -->
         <div id="user-profile-widget" style="display: none; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); text-align: left;">
@@ -717,6 +723,27 @@
             </div>
           </div>
 
+        </div>
+      </section>
+
+      <!-- VIEW 6: AUDIT REPORT PANEL -->
+      <section id="audit-view" class="view-panel hidden" style="padding: 24px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; gap: 20px;">
+        <div class="view-title-bar" style="margin-bottom: 0; display: flex; justify-content: space-between; align-items: center; width: 100%;">
+          <div>
+            <h2 style="margin: 0; font-size: 1.4rem;">Report Audit Anomalie</h2>
+            <p style="margin: 4px 0 0 0; color: var(--text-muted); font-size: 0.75rem;">Elenco delle letture incomplete o assenti raggruppate per tipologia (intervallo attivo della timeline).</p>
+          </div>
+          <button id="download-audit-pdf-btn" class="icon-btn" style="font-size: 0.76rem; padding: 8px 16px; border-radius: 8px; font-weight: 600; display: flex; align-items: center; gap: 6px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.25); color: #60a5fa; cursor: pointer; transition: all 0.2s;">
+            🖨️ Scarica Report PDF
+          </button>
+        </div>
+
+        <div class="app-card" style="flex-grow: 1; overflow-y: auto; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; box-shadow: var(--shadow-lg); padding: 24px; display: flex; flex-direction: column; gap: 20px; min-height: 0;">
+          <div id="audit-report-container" style="color: var(--text-main); font-family: var(--font-sans);">
+            <div style="text-align: center; color: var(--text-muted); padding: 40px;">
+              Caricamento report audit in corso...
+            </div>
+          </div>
         </div>
       </section>
 
