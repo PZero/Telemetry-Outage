@@ -200,6 +200,30 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
   canvas.style.height = (rowHeight * (numUPs + 1)) + "px";
   ctx.scale(dpr, dpr);
 
+  const drawBadge = (cx, cy, radius, text, fontSize) => {
+    // 1. Draw yellow circle background
+    ctx.fillStyle = "#facc15";
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // 2. Draw black border around circle
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // 3. Draw outlined letter
+    ctx.font = `bold ${fontSize} Arial, Helvetica, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#e11d48";
+    ctx.fillText(text, cx, cy + 0.5);
+    ctx.strokeStyle = "#000000";
+    ctx.lineWidth = 1.2;
+    ctx.lineJoin = "round";
+    ctx.strokeText(text, cx, cy + 0.5);
+  };
+
   // Clear background
   ctx.fillStyle = "#0c101b";
   ctx.fillRect(0, 0, widthToUse, rowHeight * (numUPs + 1));
@@ -377,37 +401,18 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
         }
 
         if (isIncomplete) {
-          // Draw a very prominent high-contrast warning-yellow circle (diameter 15px) in the bottom-right corner
-          const cx = x + colWidth - 9;
-          const cy = y + rowHeight - 9;
-          ctx.fillStyle = "#facc15"; // Bright warning yellow
-          ctx.beginPath();
-          ctx.arc(cx, cy, 7.5, 0, 2 * Math.PI);
-          ctx.fill();
-          
-          // Draw a black border around the yellow circle to define it clearly
-          ctx.strokeStyle = "#000000";
-          ctx.lineWidth = 1;
-          ctx.stroke();
-
-          // Draw a huge crimson red lightning bolt inside the circle (enlarged & outlined)
-          ctx.beginPath();
-          ctx.moveTo(cx + 2.5, cy - 6);
-          ctx.lineTo(cx - 3, cy + 1.5);
-          ctx.lineTo(cx, cy + 1.5);
-          ctx.lineTo(cx - 4, cy + 7);
-          ctx.lineTo(cx + 4, cy - 1.5);
-          ctx.lineTo(cx + 1, cy - 1.5);
-          ctx.closePath();
-          
-          ctx.fillStyle = "#e11d48"; // Vivid crimson red
-          ctx.fill();
-
-          // Bold black outline around the bolt itself to make it pop out
-          ctx.strokeStyle = "#000000";
-          ctx.lineWidth = 1.2;
-          ctx.lineJoin = "round";
-          ctx.stroke();
+          if (isMeterIncomplete && isScadaIncomplete) {
+            // Draw M and S side-by-side (overlapping slightly)
+            const cy = y + rowHeight - 6.5;
+            drawBadge(x + colWidth - 14.5, cy, 4.5, "M", "7.5px");
+            drawBadge(x + colWidth - 6, cy, 4.5, "S", "7.5px");
+          } else if (isMeterIncomplete) {
+            // Draw M in the corner
+            drawBadge(x + colWidth - 8, y + rowHeight - 8, 6.5, "M", "9px");
+          } else if (isScadaIncomplete) {
+            // Draw S in the corner
+            drawBadge(x + colWidth - 8, y + rowHeight - 8, 6.5, "S", "9px");
+          }
         }
       }
     }
