@@ -743,8 +743,16 @@ function navigateToView(viewName) {
   });
 
   // Show active view panel safely
-  const activeEl = document.getElementById(`${viewName}-view`);
-  const targetEl = (viewName === "detail") ? document.getElementById("detail-deepdive-view") : activeEl;
+  const viewIdMap = {
+    fleet: "fleet-heatmap-view",
+    stats: "fleet-stats-view",
+    detail: "detail-deepdive-view",
+    ppa: "ppa-view",
+    settings: "settings-view",
+    audit: "audit-view"
+  };
+  const targetId = viewIdMap[viewName];
+  const targetEl = targetId ? document.getElementById(targetId) : null;
   if (targetEl) {
     targetEl.classList.remove("hidden");
   }
