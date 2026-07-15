@@ -43,7 +43,13 @@ const swaggerOptions = {
     info: {
       title: 'Telemetry & Outage Integrity API',
       version: '1.0.0',
-      description: 'API REST per la gestione delle telemetrie, fermi impianto (outage), cluster di anomalie e anagrafica degli impianti.',
+      description: 'API REST per la gestione delle telemetrie, fermi impianto (outage), cluster di anomalie e anagrafica degli impianti.\n\n' +
+        '### Sequenza Operativa Consigliata per l\'Agente AI:\n' +
+        '1. **Rilevamento**: L\'agente analizza i dati o esegue `/api/agent/diagnostics/test-day` per verificare le anomalie.\n' +
+        '2. **Ingaggio**: L\'agente chiama `/api/agent/clusters/latest` per recuperare o inizializzare il cluster aperto e la relativa chat.\n' +
+        '3. **Interazione**: Se il problema persiste nei giorni successivi, l\'agente chiama `/api/agent/clusters/{id}/extend` per estendere il periodo.\n' +
+        '4. **Comunicazione**: Scrive o legge i messaggi in chat scambiati con i process owner tramite `/api/agent/clusters/{id}/messages`.\n' +
+        '5. **Chiusura**: Una volta risolto, l\'agente chiama `/api/agent/clusters/{id}/close` per risolvere e chiudere il cluster.',
     },
     servers: [
       {
@@ -653,6 +659,35 @@ app.post('/api/users/role', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Non è consentito modificare il ruolo dell\'utente proprietario.' });
     }
     await dbService.updateUserRole(email, role);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/approve', requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Missing required parameter email.' });
+    }
+    await dbService.updateUserApproval(email, 1);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/users/decline', requireAdmin, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Missing required parameter email.' });
+    }
+    if (email === 'fnicora@gmail.com') {
+      return res.status(400).json({ error: 'Non è consentito rifiutare l\'utente proprietario.' });
+    }
+    await dbService.updateUserApproval(email, -1);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

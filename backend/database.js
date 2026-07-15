@@ -134,9 +134,17 @@ async function initializeTables() {
         email TEXT PRIMARY KEY,
         name TEXT,
         role TEXT,
+        approved INTEGER DEFAULT 0,
         created_at TEXT
       )
     `);
+
+    // Add approved column to users table if it doesn't exist (migration for existing database)
+    try {
+      await dbRun(`ALTER TABLE users ADD COLUMN IF NOT EXISTS approved INTEGER DEFAULT 0`);
+    } catch (e) {
+      console.log('[PG Migration] "approved" column already exists or failed to add:', e.message);
+    }
 
     // 6. Clusters Table
     await dbRun(`
@@ -177,9 +185,9 @@ async function initializeTables() {
 
     // Seed Super Admin if not exists
     await dbRun(`
-      INSERT INTO users (email, name, role, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (email) DO NOTHING
+      INSERT INTO users (email, name, role, approved, created_at)
+      VALUES ($1, $2, $3, 1, CURRENT_TIMESTAMP)
+      ON CONFLICT (email) DO UPDATE SET approved = 1
     `, ['fnicora@gmail.com', 'Fabio Nicora', 'admin']);
 
     // Correct name if wrong
@@ -368,12 +376,23 @@ export const dbService = {
     return await dbGet('SELECT * FROM users WHERE email = $1', [email]);
   },
 
-  async saveUser(email, name, role) {
+  async saveUser(email, name, role, approved = 0) {
     await dbRun(`
-      INSERT INTO users (email, name, role, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role
-    `, [email, name, role]);
+      INSERT INTO users (email, name, role, approved, created_at)
+      VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      ON CONFLICT (email) DO UPDATE SET 
+        name = EXCLUDED.name, 
+        role = EXCLUDED.role,
+        approved = EXCLUDED.approved
+    `, [email, name, role, approved]);
+    return true;
+  },
+
+  async updateUserApproval(email, approved) {
+    if (email === 'fnicora@gmail.com') {
+      throw new Error('Non è consentito modificare l\'approvazione dell\'utente proprietario.');
+    }
+    await dbRun('UPDATE users SET approved = $1 WHERE email = $2', [approved, email]);
     return true;
   },
 

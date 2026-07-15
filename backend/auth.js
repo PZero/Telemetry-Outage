@@ -21,27 +21,32 @@ async function syncAndGetUserRole(email, name) {
     let user = await dbService.getUserByEmail(email);
     if (!user) {
       const role = (email === 'fnicora@gmail.com') ? 'admin' : 'normal';
-      await dbService.saveUser(email, name, role);
-      user = { email, name, role };
-      console.log(`[Auth] Registered new user: ${email} with role: ${role}`);
+      const approved = (email === 'fnicora@gmail.com') ? 1 : 0;
+      await dbService.saveUser(email, name, role, approved);
+      user = { email, name, role, approved };
+      console.log(`[Auth] Registered new user: ${email} with role: ${role}, approved: ${approved}`);
     } else {
       // Update name if retrieved from Google and different/not set
       if (name && user.name !== name) {
         user.name = name;
-        await dbService.saveUser(email, name, user.role);
+        await dbService.saveUser(email, name, user.role, user.approved);
         console.log(`[Auth] Updated user name in database to Google profile name: ${name}`);
       }
-      // Force fnicora@gmail.com to always be admin
-      if (email === 'fnicora@gmail.com' && user.role !== 'admin') {
+      // Force fnicora@gmail.com to always be admin & approved
+      if (email === 'fnicora@gmail.com' && (user.role !== 'admin' || user.approved !== 1)) {
         user.role = 'admin';
-        // Run update query in background
-        dbService.updateUserRole(email, 'admin').catch(console.error);
+        user.approved = 1;
+        await dbService.updateUserApproval(email, 1).catch(console.error);
+        await dbService.updateUserRole(email, 'admin').catch(console.error);
       }
     }
-    return user.role;
+    return { role: user.role, approved: user.approved };
   } catch (err) {
     console.error('[Auth Sync Error] Failed to sync user details:', err);
-    return (email === 'fnicora@gmail.com') ? 'admin' : 'normal';
+    return {
+      role: (email === 'fnicora@gmail.com') ? 'admin' : 'normal',
+      approved: (email === 'fnicora@gmail.com') ? 1 : 0
+    };
   }
 }
 
@@ -62,13 +67,46 @@ export async function requireGoogleAuth(req, res, next) {
   if (token === 'mock-google-token-id') {
     const email = 'fnicora@gmail.com';
     const name = 'Fabio Nicora (Demo)';
-    const role = await syncAndGetUserRole(email, name);
+    const authResult = await syncAndGetUserRole(email, name);
     req.user = {
       email,
       name,
       picture: '',
-      role
+      role: authResult.role,
+      approved: authResult.approved
     };
+    return next();
+  }
+
+  if (token === 'mock-pending-token-id') {
+    req.user = {
+      email: 'pending.user@pzero.io',
+      name: 'Utente In Attesa',
+      picture: '',
+      role: 'normal',
+      approved: 0
+    };
+    // Block non-approved users from all routes except profile endpoint
+    const isProfileRoute = req.path === '/auth/profile' || req.path === '/api/auth/profile' || req.path.includes('/auth/profile');
+    if (!isProfileRoute) {
+      return res.status(403).json({ error: 'USER_NOT_APPROVED', approved: 0 });
+    }
+    return next();
+  }
+
+  if (token === 'mock-declined-token-id') {
+    req.user = {
+      email: 'declined.user@pzero.io',
+      name: 'Utente Rifiutato',
+      picture: '',
+      role: 'normal',
+      approved: -1
+    };
+    // Block non-approved users from all routes except profile endpoint
+    const isProfileRoute = req.path === '/auth/profile' || req.path === '/api/auth/profile' || req.path.includes('/auth/profile');
+    if (!isProfileRoute) {
+      return res.status(403).json({ error: 'USER_NOT_APPROVED', approved: -1 });
+    }
     return next();
   }
 
@@ -95,15 +133,24 @@ export async function requireGoogleAuth(req, res, next) {
 
     const email = payload.email;
     const name = payload.name;
-    const role = await syncAndGetUserRole(email, name);
+    const authResult = await syncAndGetUserRole(email, name);
 
     // Attach verified user info to request
     req.user = {
       email,
       name,
       picture: payload.picture,
-      role
+      role: authResult.role,
+      approved: authResult.approved
     };
+
+    // Block non-approved users from all routes except profile endpoint
+    if (email !== 'fnicora@gmail.com' && authResult.approved !== 1) {
+      const isProfileRoute = req.path === '/auth/profile' || req.path === '/api/auth/profile' || req.path.includes('/auth/profile');
+      if (!isProfileRoute) {
+        return res.status(403).json({ error: 'USER_NOT_APPROVED', approved: authResult.approved });
+      }
+    }
 
     next();
   } catch (error) {

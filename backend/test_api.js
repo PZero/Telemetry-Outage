@@ -16,7 +16,7 @@ async function runTests() {
     testCount++;
     const url = `${BASE_URL}${urlPath}`;
     const headers = {
-      'Authorization': `Bearer ${TOKEN}`,
+      'Authorization': `Bearer ${options.token || TOKEN}`,
       'Content-Type': 'application/json',
       ...(options.headers || {})
     };
@@ -46,6 +46,29 @@ async function runTests() {
       return { ok: false, error: err };
     }
   }
+
+  // --- 0. USER APPROVAL WORKFLOW TESTS ---
+  console.log('\n--- [0] User Approval & Authorization Block ---');
+  
+  await assertAPI('Utente in attesa viene bloccato sulle API dati', '/api/agent/registry/assignments', {
+    token: 'mock-pending-token-id',
+    expectedStatus: 403
+  });
+
+  await assertAPI('Utente in attesa può leggere il proprio profilo', '/api/auth/profile', {
+    token: 'mock-pending-token-id',
+    expectedStatus: 200
+  });
+
+  await assertAPI('Utente rifiutato viene bloccato sulle API dati', '/api/agent/registry/assignments', {
+    token: 'mock-declined-token-id',
+    expectedStatus: 403
+  });
+
+  await assertAPI('Utente rifiutato può leggere il proprio profilo', '/api/auth/profile', {
+    token: 'mock-declined-token-id',
+    expectedStatus: 200
+  });
 
   // --- 1. REGISTRY TESTS ---
   console.log('\n--- [1] Anagrafica & Partner PPA ---');

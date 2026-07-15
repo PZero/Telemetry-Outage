@@ -2042,29 +2042,84 @@ function loginUser(user) {
     }
   }
 
-  // Fade out and hide login screen overlay
-  const loginScreen = document.getElementById("login-screen");
-  if (loginScreen) {
-    loginScreen.style.opacity = "0";
-    setTimeout(() => {
-      loginScreen.style.display = "none";
-    }, 500);
-  }
-  
+  // Bind pending/declined logout buttons
+  const btnPending = document.getElementById("login-pending-logout-btn");
+  if (btnPending) btnPending.onclick = logoutUser;
+  const btnDeclined = document.getElementById("login-declined-logout-btn");
+  if (btnDeclined) btnDeclined.onclick = logoutUser;
+
   console.log(`[Auth] User ${user.email} successfully logged in.`);
   
+  // Helper to show approval block screen
+  function showApprovalStatus(status) {
+    const form = document.getElementById("login-auth-form");
+    const pending = document.getElementById("login-approval-pending");
+    const declined = document.getElementById("login-approval-declined");
+    
+    if (form && pending && declined) {
+      form.style.display = "none";
+      if (status === 0 || status === undefined || status === null) {
+        pending.style.display = "flex";
+        declined.style.display = "none";
+      } else if (status === -1) {
+        pending.style.display = "none";
+        declined.style.display = "flex";
+      }
+    }
+    
+    // Keep login screen overlay visible
+    const loginScreen = document.getElementById("login-screen");
+    if (loginScreen) {
+      loginScreen.style.opacity = "1";
+      loginScreen.style.display = "flex";
+    }
+  }
+
   // Initialize and load everything securely with auth headers active
   (async () => {
     try {
-      // 1. Fetch complete profile including the database role
+      // 1. Fetch complete profile including the database role and approval status
       const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
       const profileRes = await fetch(`${apiUrl}/api/auth/profile`, {
         headers: getAuthHeaders()
       });
-      if (!profileRes.ok) throw new Error("Failed to load user profile");
+      
+      if (!profileRes.ok) {
+        if (profileRes.status === 403) {
+          const errData = await profileRes.json().catch(() => ({}));
+          if (errData.error === 'USER_NOT_APPROVED') {
+            showApprovalStatus(errData.approved);
+            return;
+          }
+        }
+        throw new Error("Failed to load user profile");
+      }
+      
       const profile = await profileRes.json();
+      
+      if (profile.approved !== undefined && profile.approved !== 1) {
+        showApprovalStatus(profile.approved);
+        return;
+      }
+
       state.user.role = profile.role; // Set the role from backend database!
       
+      // User is approved! Reset forms and fade out login screen overlay
+      const loginScreen = document.getElementById("login-screen");
+      if (loginScreen) {
+        loginScreen.style.opacity = "0";
+        setTimeout(() => {
+          loginScreen.style.display = "none";
+        }, 500);
+      }
+      
+      const form = document.getElementById("login-auth-form");
+      const pending = document.getElementById("login-approval-pending");
+      const declined = document.getElementById("login-approval-declined");
+      if (form) form.style.display = "flex";
+      if (pending) pending.style.display = "none";
+      if (declined) declined.style.display = "none";
+
       // Update session storage with the role
       localStorage.setItem("google_user_session", JSON.stringify(state.user));
       
@@ -2545,17 +2600,47 @@ async function loadUsersTable() {
         ? `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; font-weight: 600; font-size: 0.65rem;">Admin</span>`
         : `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: var(--text-muted); font-size: 0.65rem;">Utente</span>`;
 
-      // Action Button details
-      let actionBtnHtml = '';
-      if (isOwner) {
-        actionBtnHtml = `<span style="color: var(--text-muted); font-size: 0.65rem; display: inline-flex; align-items: center; gap: 4px; font-style: italic;">🔒 Proprietario Protetto</span>`;
-      } else if (isSelf) {
-        actionBtnHtml = `<span style="color: var(--text-muted); font-size: 0.65rem; display: inline-flex; align-items: center; gap: 4px; font-style: italic;">👤 Tu (Protetto)</span>`;
-      } else if (isAdmin) {
-        actionBtnHtml = `<button class="btn btn-danger ppa-delete-tag-btn change-user-role-btn" data-email="${user.email}" data-target-role="normal" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171;">Rimuovi Admin</button>`;
+      // Status Badge details
+      let statusBadge = '';
+      if (user.approved === 1) {
+        statusBadge = `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; font-weight: 600; font-size: 0.65rem;">Abilitato</span>`;
+      } else if (user.approved === -1) {
+        statusBadge = `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; font-weight: 600; font-size: 0.65rem;">Rifiutato</span>`;
       } else {
-        actionBtnHtml = `<button class="btn btn-primary change-user-role-btn" data-email="${user.email}" data-target-role="admin" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa;">Promuovi ad Admin</button>`;
+        statusBadge = `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); color: #fbbf24; font-weight: 600; font-size: 0.65rem;">In attesa</span>`;
       }
+
+      // Action Button details
+      let approvalButtonsHtml = '';
+      let roleButtonHtml = '';
+      
+      if (isOwner) {
+        roleButtonHtml = `<span style="color: var(--text-muted); font-size: 0.65rem; display: inline-flex; align-items: center; gap: 4px; font-style: italic;">🔒 Proprietario Protetto</span>`;
+      } else if (isSelf) {
+        roleButtonHtml = `<span style="color: var(--text-muted); font-size: 0.65rem; display: inline-flex; align-items: center; gap: 4px; font-style: italic;">👤 Tu (Protetto)</span>`;
+      } else {
+        // Build approval actions depending on status
+        if (user.approved === 1) {
+          approvalButtonsHtml = `<button class="btn btn-danger decline-user-btn" data-email="${user.email}" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; margin-right: 6px;">Blocca Accesso</button>`;
+          
+          if (isAdmin) {
+            roleButtonHtml = `<button class="btn btn-danger ppa-delete-tag-btn change-user-role-btn" data-email="${user.email}" data-target-role="normal" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171;">Rimuovi Admin</button>`;
+          } else {
+            roleButtonHtml = `<button class="btn btn-primary change-user-role-btn" data-email="${user.email}" data-target-role="admin" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa;">Promuovi ad Admin</button>`;
+          }
+        } else if (user.approved === 0 || user.approved === undefined || user.approved === null) {
+          approvalButtonsHtml = `
+            <button class="btn btn-success approve-user-btn" data-email="${user.email}" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; margin-right: 6px;">Approva</button>
+            <button class="btn btn-danger decline-user-btn" data-email="${user.email}" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171;">Declina</button>
+          `;
+        } else if (user.approved === -1) {
+          approvalButtonsHtml = `
+            <button class="btn btn-success approve-user-btn" data-email="${user.email}" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399;">Approva</button>
+          `;
+        }
+      }
+
+      const actionBtnHtml = `<div style="display: flex; justify-content: flex-end; align-items: center;">${approvalButtonsHtml}${roleButtonHtml}</div>`;
 
       return `
         <tr style="border-bottom: 1px solid var(--panel-border); height: 45px;">
@@ -2563,12 +2648,13 @@ async function loadUsersTable() {
           <td style="padding: 6px 16px; font-weight: 600; color: var(--text-main);">${user.name}</td>
           <td style="padding: 6px 16px; color: var(--text-muted); font-family: var(--font-mono); font-size: 0.7rem;">${user.email}</td>
           <td style="padding: 6px 16px;">${roleBadge}</td>
+          <td style="padding: 6px 16px;">${statusBadge}</td>
           <td style="padding: 6px 16px; text-align: right;">${actionBtnHtml}</td>
         </tr>
       `;
     }).join("");
 
-    // Bind action buttons
+    // Bind role change buttons
     tbody.querySelectorAll(".change-user-role-btn").forEach(btn => {
       btn.onclick = async () => {
         const email = btn.dataset.email;
@@ -2597,9 +2683,59 @@ async function loadUsersTable() {
       };
     });
 
+    // Bind approve buttons
+    tbody.querySelectorAll(".approve-user-btn").forEach(btn => {
+      btn.onclick = async () => {
+        const email = btn.dataset.email;
+        if (confirm(`Sei sicuro di voler approvare l'utente "${email}"?`)) {
+          try {
+            const res = await fetch(`${apiUrl}/api/users/approve`, {
+              method: 'POST',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ email })
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error || `HTTP error ${res.status}`);
+            }
+            showToastNotification(`Utente ${email} abilitato con successo`);
+            await loadUsersTable();
+          } catch (e) {
+            console.error(e);
+            alert(`Errore approvazione: ${e.message}`);
+          }
+        }
+      };
+    });
+
+    // Bind decline buttons
+    tbody.querySelectorAll(".decline-user-btn").forEach(btn => {
+      btn.onclick = async () => {
+        const email = btn.dataset.email;
+        if (confirm(`Sei sicuro di voler rifiutare/bloccare l'accesso all'utente "${email}"?`)) {
+          try {
+            const res = await fetch(`${apiUrl}/api/users/decline`, {
+              method: 'POST',
+              headers: getAuthHeaders(),
+              body: JSON.stringify({ email })
+            });
+            if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error || `HTTP error ${res.status}`);
+            }
+            showToastNotification(`Accesso disattivato per ${email}`);
+            await loadUsersTable();
+          } catch (e) {
+            console.error(e);
+            alert(`Errore disattivazione: ${e.message}`);
+          }
+        }
+      };
+    });
+
   } catch (error) {
     console.error("[Settings Users] Failed to load users list:", error);
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--accent-red); font-style: italic; padding: 20px;">Impossibile recuperare l'elenco utenti dal server.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: var(--accent-red); font-style: italic; padding: 20px;">Impossibile recuperare l'elenco utenti dal server.</td></tr>`;
   } finally {
     if (refreshBtn) refreshBtn.disabled = false;
   }
