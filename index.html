@@ -62,34 +62,64 @@
 
       <div style="height: 1px; width: 100%; background: linear-gradient(to right, transparent, rgba(255,255,255,0.08), transparent);"></div>
 
-      <!-- Welcome message -->
-      <div style="text-align: center;">
-        <h3 style="font-size: 0.9rem; font-weight: 600; color: var(--text-main); margin: 0 0 8px 0;">Accesso Richiesto</h3>
-        <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; margin: 0;">Esegui l'accesso per monitorare le telemetrie e gli outages delle 100 unità di produzione.</p>
-      </div>
+      <!-- Welcome message and sign-in controls -->
+      <div id="login-auth-form" style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 24px;">
+        <div style="text-align: center;">
+          <h3 style="font-size: 0.9rem; font-weight: 600; color: var(--text-main); margin: 0 0 8px 0;">Accesso Richiesto</h3>
+          <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; margin: 0;">Esegui l'accesso per monitorare le telemetrie e gli outages delle 100 unità di produzione.</p>
+        </div>
 
-      <!-- Google Button / Mock Login Button -->
-      <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 50px; justify-content: center;">
-        <!-- Real Google Button Container -->
-        <div id="google-signin-btn-container" style="width: 100%; display: flex; justify-content: center;">
-          <div id="google-signin-btn"></div>
+        <!-- Google Button / Mock Login Button -->
+        <div style="width: 100%; display: flex; flex-direction: column; align-items: center; gap: 12px; min-height: 50px; justify-content: center;">
+          <!-- Real Google Button Container -->
+          <div id="google-signin-btn-container" style="width: 100%; display: flex; justify-content: center;">
+            <div id="google-signin-btn"></div>
+          </div>
+          
+          <!-- Mock Login Button (visible only in Demo/Bypass mode) -->
+          <button id="mock-signin-btn" style="display: none; width: 100%; padding: 10px 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border: none; border-radius: 8px; color: white; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(16,185,129,0.25);" onmouseover="this.style.opacity=0.9" onmouseout="this.style.opacity=1">
+            &#x1F511; Accedi in Modalità Sviluppo (Demo)
+          </button>
         </div>
         
-        <!-- Mock Login Button (visible only in Demo/Bypass mode) -->
-        <button id="mock-signin-btn" style="display: none; width: 100%; padding: 10px 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border: none; border-radius: 8px; color: white; font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s; box-shadow: 0 4px 12px rgba(16,185,129,0.25);" onmouseover="this.style.opacity=0.9" onmouseout="this.style.opacity=1">
-          &#x1F511; Accedi in Modalità Sviluppo (Demo)
-        </button>
-      </div>
-      
-      <!-- Error Message Container -->
-      <div id="login-error-container" style="display: none; width: 100%; padding: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; color: #f87171; font-size: 0.7rem; line-height: 1.4; text-align: left; word-break: break-word; box-sizing: border-box;">
-        <strong>⚠️ Errore di Accesso:</strong> <span id="login-error-text"></span>
+        <!-- Error Message Container -->
+        <div id="login-error-container" style="display: none; width: 100%; padding: 10px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.25); border-radius: 8px; color: #f87171; font-size: 0.7rem; line-height: 1.4; text-align: left; word-break: break-word; box-sizing: border-box;">
+          <strong>⚠️ Errore di Accesso:</strong> <span id="login-error-text"></span>
+        </div>
+
+        <!-- Footer Note -->
+        <span id="login-footer-note" style="font-size: 0.58rem; color: var(--text-muted); line-height: 1.4;">
+          Google Sign-In abilitato. I tuoi dati personali non vengono registrati su database di terze parti.
+        </span>
       </div>
 
-      <!-- Footer Note -->
-      <span id="login-footer-note" style="font-size: 0.58rem; color: var(--text-muted); line-height: 1.4;">
-        Google Sign-In abilitato. I tuoi dati personali non vengono registrati su database di terze parti.
-      </span>
+      <!-- Pending Approval Overlay -->
+      <div id="login-approval-pending" style="display: none; flex-direction: column; align-items: center; gap: 20px; width: 100%;">
+        <div style="width: 50px; height: 50px; border-radius: 50%; background: rgba(245, 158, 11, 0.15); border: 1px solid rgba(245, 158, 11, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.6rem; color: #f59e0b;">
+          ⏳
+        </div>
+        <div style="text-align: center;">
+          <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--text-main); margin: 0 0 8px 0;">Account in Attesa di Abilitazione</h3>
+          <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; margin: 0;">Il tuo account non è ancora stato autorizzato da un amministratore.<br>Si prega di riprovare a breve o contattare l'assistenza.</p>
+        </div>
+        <button id="login-pending-logout-btn" style="width: 100%; padding: 10px 16px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: var(--text-main); font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.12)'" onmouseout="this.style.background='rgba(255,255,255,0.08)'">
+          Disconnettiti
+        </button>
+      </div>
+
+      <!-- Access Declined Overlay -->
+      <div id="login-approval-declined" style="display: none; flex-direction: column; align-items: center; gap: 20px; width: 100%;">
+        <div style="width: 50px; height: 50px; border-radius: 50%; background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.3); display: flex; align-items: center; justify-content: center; font-size: 1.6rem; color: #f87171;">
+          ❌
+        </div>
+        <div style="text-align: center;">
+          <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--text-main); margin: 0 0 8px 0;">Accesso Negato</h3>
+          <p style="font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; margin: 0;">La tua richiesta di accesso per questo account è stata rifiutata da un amministratore.</p>
+        </div>
+        <button id="login-declined-logout-btn" style="width: 100%; padding: 10px 16px; background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 8px; color: var(--text-main); font-size: 0.75rem; font-weight: 700; cursor: pointer; transition: all 0.2s;" onmouseover="this.style.background='rgba(255,255,255,0.12)'" onmouseout="this.style.background='rgba(255,255,255,0.08)'">
+          Disconnettiti
+        </button>
+      </div>
     </div>
   </div>
 
@@ -903,13 +933,14 @@
                     <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted);">Nome</th>
                     <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted);">Email</th>
                     <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); width: 100px;">Ruolo</th>
-                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); text-align: right; width: 150px;">Azioni</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); width: 120px;">Stato</th>
+                    <th style="padding: 8px 16px; font-weight: 700; color: var(--text-muted); text-align: right; width: 220px;">Azioni</th>
                   </tr>
                 </thead>
                 <tbody id="settings-users-tbody">
                   <!-- Dynamic user rows will be loaded here -->
                   <tr style="height: 60px;">
-                    <td colspan="5" style="text-align: center; color: var(--text-muted); font-style: italic;">Caricamento utenti...</td>
+                    <td colspan="6" style="text-align: center; color: var(--text-muted); font-style: italic;">Caricamento utenti...</td>
                   </tr>
                 </tbody>
               </table>
