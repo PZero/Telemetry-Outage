@@ -47,8 +47,8 @@ const swaggerOptions = {
     },
     servers: [
       {
-        url: process.env.VITE_API_URL || 'http://localhost:3000',
-        description: 'Server di Sviluppo/Produzione'
+        url: '/',
+        description: 'Host Corrente (Autodetect)'
       }
     ],
     components: {
