@@ -5,9 +5,14 @@ import { dbService } from './database.js';
 import { enqueueRequest, getQueueStatus } from './queue.js';
 import { requireGoogleAuth, requireAdmin } from './auth.js';
 import { startSync, cancelSync, getSyncStatus } from './sync.js';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJsdoc from 'swagger-jsdoc';
+
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -30,6 +35,47 @@ app.use((req, res, next) => {
 
 // Parse JSON request bodies
 app.use(express.json());
+
+// --- SWAGGER / OPENAPI SETUP ---
+const swaggerOptions = {
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Telemetry & Outage Integrity API',
+      version: '1.0.0',
+      description: 'API REST per la gestione delle telemetrie, fermi impianto (outage), cluster di anomalie e anagrafica degli impianti.',
+    },
+    servers: [
+      {
+        url: process.env.VITE_API_URL || 'http://localhost:3000',
+        description: 'Server di Sviluppo/Produzione'
+      }
+    ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'Inserisci il token JWT di Google OAuth 2.0'
+        }
+      }
+    },
+    security: [
+      {
+        bearerAuth: []
+      }
+    ]
+  },
+  apis: ['./backend/server.js']
+};
+
+const swaggerDocs = swaggerJsdoc(swaggerOptions);
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+app.get('/api-docs/openapi.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerDocs);
+});
 
 // Token cache state
 let cachedToken = null;
@@ -607,6 +653,636 @@ app.post('/api/users/role', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Non è consentito modificare il ruolo dell\'utente proprietario.' });
     }
     await dbService.updateUserRole(email, role);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters:
+ *   get:
+ *     summary: Ottiene l'elenco dei cluster di anomalie
+ *     description: Ritorna una lista di cluster filtrata per stato, UP o tipo di anomalia.
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [open, closed]
+ *         description: Filtra per stato del cluster.
+ *       - in: query
+ *         name: upId
+ *         schema:
+ *           type: string
+ *         description: Filtra per ID impianto (UP).
+ *       - in: query
+ *         name: type
+ *         schema:
+ *           type: string
+ *           enum: [scada, meter, both]
+ *         description: Filtra per tipo di anomalia.
+ *     responses:
+ *       200:
+ *         description: Lista di cluster trovati.
+ */
+app.get('/api/agent/clusters', requireGoogleAuth, async (req, res) => {
+  try {
+    const { status, upId, type } = req.query;
+    const clusters = await dbService.getClusters(status, upId, type);
+    res.json(clusters);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters/latest:
+ *   get:
+ *     summary: Recupera o crea il cluster di anomalie più recente
+ *     description: Ritorna il cluster aperto più recente per un impianto e tipo. Se non esiste, crea automaticamente un nuovo cluster aperto per attivare il flusso di chat con i process owner.
+ *     parameters:
+ *       - in: query
+ *         name: upId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID dell'impianto.
+ *       - in: query
+ *         name: type
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [scada, meter, both]
+ *         description: Tipo di anomalia.
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *         description: Data di inizio da usare se viene creato un nuovo cluster (YYYY-MM-DD).
+ *       - in: query
+ *         name: notes
+ *         schema:
+ *           type: string
+ *         description: Messaggio di sistema iniziale se viene creato un nuovo cluster.
+ *     responses:
+ *       200:
+ *         description: Cluster esistente o appena creato.
+ */
+app.get('/api/agent/clusters/latest', requireGoogleAuth, async (req, res) => {
+  try {
+    const { upId, type, startDate, notes } = req.query;
+    if (!upId || !type) {
+      return res.status(400).json({ error: 'Missing required parameters upId or type.' });
+    }
+    let cluster = await dbService.getLatestOpenCluster(upId, type);
+    if (!cluster) {
+      const startD = startDate || new Date().toISOString().split('T')[0];
+      cluster = await dbService.createCluster(upId, type, startD, startD, notes || `Cluster avviato per anomalia ${type}.`);
+    }
+    res.json(cluster);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters/{id}/extend:
+ *   post:
+ *     summary: Estende l'intervallo temporale di un cluster esistente
+ *     description: Aggiunge giorni o aggiorna la data finale di un cluster quando l'anomalia persiste, scrivendo un messaggio di sistema nella chat per notificare l'estensione senza creare un nuovo ticket.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - extendToDate
+ *             properties:
+ *               extendToDate:
+ *                 type: string
+ *                 description: Nuova data di fine del cluster (YYYY-MM-DD).
+ *               systemNotification:
+ *                 type: string
+ *                 description: Messaggio di notifica da inserire nello storico chat.
+ *     responses:
+ *       200:
+ *         description: Estensione completata con successo.
+ */
+app.post('/api/agent/clusters/:id/extend', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { extendToDate, systemNotification } = req.body;
+    if (!extendToDate) {
+      return res.status(400).json({ error: 'Missing required body field extendToDate.' });
+    }
+    await dbService.extendCluster(id, extendToDate, systemNotification);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters/{id}/close:
+ *   post:
+ *     summary: Chiude un cluster come risolto
+ *     description: Segna lo stato del cluster come 'closed' e aggiunge un messaggio finale di risoluzione alla chat.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               resolutionCategory:
+ *                 type: string
+ *                 description: Categoria di risoluzione del problema.
+ *               resolutionNotes:
+ *                 type: string
+ *                 description: Dettagli o note conclusive sulla risoluzione.
+ *     responses:
+ *       200:
+ *         description: Chiusura completata con successo.
+ */
+app.post('/api/agent/clusters/:id/close', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { resolutionCategory, resolutionNotes } = req.body;
+    await dbService.closeCluster(id, resolutionCategory, resolutionNotes);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters/{id}:
+ *   delete:
+ *     summary: Elimina un cluster di anomalie
+ *     description: Rimuove permanentemente un cluster e tutti i suoi messaggi associati.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     responses:
+ *       200:
+ *         description: Eliminazione completata con successo.
+ */
+app.delete('/api/agent/clusters/:id', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await dbService.deleteCluster(id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters/{id}/messages:
+ *   get:
+ *     summary: Ottiene la cronologia della chat del cluster
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     responses:
+ *       200:
+ *         description: Elenco dei messaggi in ordine cronologico.
+ *   post:
+ *     summary: Invia un messaggio nella chat del cluster
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - sender
+ *               - messageText
+ *             properties:
+ *               sender:
+ *                 type: string
+ *                 description: Autore del messaggio (es. 'agent' o nome utente).
+ *               messageText:
+ *                 type: string
+ *                 description: Testo del messaggio da inviare.
+ *     responses:
+ *       200:
+ *         description: Messaggio inviato con successo.
+ */
+app.get('/api/agent/clusters/:id/messages', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const messages = await dbService.getClusterMessages(id);
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/agent/clusters/:id/messages', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sender, messageText } = req.body;
+    if (!sender || !messageText) {
+      return res.status(400).json({ error: 'Missing required body fields sender or messageText.' });
+    }
+    await dbService.addClusterMessage(id, sender, messageText);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/diagnostics/test-day:
+ *   post:
+ *     summary: Esegue un test di integrità istantaneo per una UP e una giornata
+ *     description: Legge le letture ed esegue l'algoritmo di classificazione dell'integrità ritornando lo stato e il conteggio dei valori validi.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - upId
+ *               - date
+ *             properties:
+ *               upId:
+ *                 type: string
+ *                 description: ID dell'impianto.
+ *               date:
+ *                 type: string
+ *                 description: Data da verificare (YYYY-MM-DD).
+ *     responses:
+ *       200:
+ *         description: Esito del test di integrità.
+ */
+app.post('/api/agent/diagnostics/test-day', requireGoogleAuth, async (req, res) => {
+  try {
+    const { upId, date } = req.body;
+    if (!upId || !date) {
+      return res.status(400).json({ error: 'Missing required body fields upId or date.' });
+    }
+    const up = await dbService.getUPById(upId);
+    if (!up) {
+      return res.status(404).json({ error: `UP ${upId} not found in registry.` });
+    }
+    
+    const meterValues = await dbService.getObservations(upId, date, 'meter');
+    const scadaValues = await dbService.getObservations(upId, date, 'scada');
+    
+    const countValids = (arr) => {
+      try {
+        return arr ? JSON.parse(arr).filter(v => v !== null && v !== undefined).length : 0;
+      } catch (e) {
+        return 0;
+      }
+    };
+    const meterValids = countValids(meterValues);
+    const scadaValids = countValids(scadaValues);
+    
+    res.json({
+      upId,
+      date,
+      meterValids,
+      scadaValids,
+      status: (meterValids > 0 && (up.scada_disabled || scadaValids > 0)) ? 'green' : 'red'
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/reports/audit:
+ *   post:
+ *     summary: Elabora un report di audit on-demand
+ *     description: Esegue il controllo di integrità complessivo per un intervallo temporale e restituisce il report strutturato con le anomalie raggruppate per UP.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 description: Data inizio audit (YYYY-MM-DD).
+ *               endDate:
+ *                 type: string
+ *                 description: Data fine audit (YYYY-MM-DD).
+ *     responses:
+ *       200:
+ *         description: Report di audit calcolato.
+ */
+app.post('/api/agent/reports/audit', requireGoogleAuth, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Missing required body fields startDate or endDate.' });
+    }
+    
+    const ups = await dbService.getAllUPs();
+    const anomalies = [];
+    
+    for (const up of ups) {
+      const missingMeter = [];
+      const missingScada = [];
+      
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        const dStr = d.toISOString().split('T')[0];
+        
+        const m = await dbService.getObservations(up.id, dStr, 'meter');
+        const s = await dbService.getObservations(up.id, dStr, 'scada');
+        
+        const countValids = (arr) => {
+          try {
+            return arr ? JSON.parse(arr).filter(v => v !== null && v !== undefined).length : 0;
+          } catch (e) {
+            return 0;
+          }
+        };
+        const mValids = countValids(m);
+        const sValids = countValids(s);
+        
+        if (mValids < 96) missingMeter.push(dStr);
+        if (!up.scada_disabled && sValids < 96) missingScada.push(dStr);
+      }
+      
+      if (missingMeter.length > 0 || missingScada.length > 0) {
+        anomalies.push({
+          upId: up.id,
+          name: up.name,
+          ppaPartner: up.ppa_partner || 'Nessuno',
+          missingMeterDates: missingMeter,
+          missingScadaDates: missingScada
+        });
+      }
+    }
+    
+    res.json({
+      period: `dal ${startDate} al ${endDate}`,
+      generatedAt: new Date().toISOString(),
+      anomalies
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/registry/ups:
+ *   post:
+ *     summary: Aggiunge un impianto (UP) in anagrafica
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - id
+ *               - name
+ *               - tech
+ *               - region
+ *               - capacity
+ *             properties:
+ *               id:
+ *                 type: string
+ *               name:
+ *                 type: string
+ *               tech:
+ *                 type: string
+ *                 enum: [Solar, Wind]
+ *               region:
+ *                 type: string
+ *               capacity:
+ *                 type: number
+ *               lat:
+ *                 type: number
+ *               lon:
+ *                 type: number
+ *               ppa_partner:
+ *                 type: string
+ *               scada_disabled:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: UP aggiunta correttamente.
+ */
+app.post('/api/agent/registry/ups', requireGoogleAuth, requireAdmin, async (req, res) => {
+  try {
+    const up = req.body;
+    if (!up.id || !up.name || !up.tech || !up.region || up.capacity === undefined) {
+      return res.status(400).json({ error: 'Missing required fields: id, name, tech, region, capacity.' });
+    }
+    await dbService.saveUP(up.id, up.name, up.tech, up.region, up.capacity, up.lat || 0, up.lon || 0, up.ppa_partner || null, up.scada_disabled ? 1 : 0);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/registry/ups/{id}:
+ *   delete:
+ *     summary: Rimuove un impianto (UP) dall'anagrafica
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID della UP.
+ *     responses:
+ *       200:
+ *         description: UP rimossa correttamente.
+ */
+app.delete('/api/agent/registry/ups/:id', requireGoogleAuth, requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await dbService.deleteUP(id);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/registry/ppa-partners:
+ *   get:
+ *     summary: Ottiene l'elenco dei partner PPA (controparti)
+ *     responses:
+ *       200:
+ *         description: Lista dei partner PPA.
+ *   post:
+ *     summary: Crea un nuovo partner PPA (controparte)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *             properties:
+ *               name:
+ *                 type: string
+ *               color:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Partner PPA aggiunto correttamente.
+ */
+app.get('/api/agent/registry/ppa-partners', requireGoogleAuth, async (req, res) => {
+  try {
+    const tags = await dbService.getAllPpaTags();
+    res.json(tags);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/agent/registry/ppa-partners', requireGoogleAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, color } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Missing name in request body.' });
+    }
+    await dbService.savePpaTag(name, color || '#3b82f6');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/registry/ppa-partners/{name}:
+ *   delete:
+ *     summary: Elimina una controparte PPA
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Nome della controparte.
+ *     responses:
+ *       200:
+ *         description: Controparte eliminata correttamente.
+ */
+app.delete('/api/agent/registry/ppa-partners/:name', requireGoogleAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name } = req.params;
+    await dbService.deletePpaTag(name);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/registry/assignments:
+ *   get:
+ *     summary: Ottiene l'elenco delle associazioni UP e partner PPA
+ *     responses:
+ *       200:
+ *         description: Elenco degli accoppiamenti UP-PPA.
+ */
+app.get('/api/agent/registry/assignments', requireGoogleAuth, async (req, res) => {
+  try {
+    const ups = await dbService.getAllUPs();
+    const assignments = ups.map(up => ({
+      upId: up.id,
+      upName: up.name,
+      ppaPartner: up.ppa_partner || 'Nessuno'
+    }));
+    res.json(assignments);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/registry/assign:
+ *   post:
+ *     summary: Assegna o rimuove un partner PPA ad una UP
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - upId
+ *             properties:
+ *               upId:
+ *                 type: string
+ *               ppaTag:
+ *                 type: string
+ *                 description: Nome del partner PPA. Impostare a null per disassociare.
+ *     responses:
+ *       200:
+ *         description: Assegnazione aggiornata correttamente.
+ */
+app.post('/api/agent/registry/assign', requireGoogleAuth, requireAdmin, async (req, res) => {
+  try {
+    const { upId, ppaTag } = req.body;
+    if (!upId) {
+      return res.status(400).json({ error: 'Missing required parameter upId.' });
+    }
+    await dbService.updateUPPpaAndScada(upId, ppaTag, undefined);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

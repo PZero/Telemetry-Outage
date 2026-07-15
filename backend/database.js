@@ -1,6 +1,9 @@
 import pg from 'pg';
 import dotenv from 'dotenv';
-dotenv.config();
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env') });
 
 const { Pool } = pg;
 
@@ -135,6 +138,31 @@ async function initializeTables() {
       )
     `);
 
+    // 6. Clusters Table
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS clusters (
+        id SERIAL PRIMARY KEY,
+        up_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open',
+        created_at TEXT,
+        updated_at TEXT
+      )
+    `);
+
+    // 7. Cluster Messages Table
+    await dbRun(`
+      CREATE TABLE IF NOT EXISTS cluster_messages (
+        id SERIAL PRIMARY KEY,
+        cluster_id INTEGER NOT NULL,
+        sender TEXT NOT NULL,
+        message_text TEXT NOT NULL,
+        created_at TEXT
+      )
+    `);
+
     // Seed PPA Tags if empty
     const ppaRow = await dbGet('SELECT COUNT(*) as count FROM ppa_tags');
     if (parseInt(ppaRow.count) === 0) {
@@ -168,7 +196,7 @@ async function initializeTables() {
 
     console.log('[PG] Database initialization completed.');
   } catch (err) {
-    console.error('[PG] Error initializing database tables:', err.message);
+    console.error('[PG] Error initializing database tables:', err);
   }
 }
 
@@ -370,5 +398,97 @@ export const dbService = {
       outages: parseInt(outRow.count),
       registry: parseInt(regRow.count)
     };
+  },
+
+  // --- CLUSTERS & MESSAGES METHODS ---
+  async getClusters(status, upId, type) {
+    let sql = 'SELECT * FROM clusters WHERE 1=1';
+    const params = [];
+    let paramIdx = 1;
+    if (status) {
+      sql += ` AND status = $${paramIdx++}`;
+      params.push(status);
+    }
+    if (upId) {
+      sql += ` AND up_id = $${paramIdx++}`;
+      params.push(upId);
+    }
+    if (type) {
+      sql += ` AND type = $${paramIdx++}`;
+      params.push(type);
+    }
+    sql += ' ORDER BY start_date DESC, created_at DESC';
+    return await dbAll(sql, params);
+  },
+
+  async createCluster(upId, type, startDate, endDate, notes) {
+    const now = new Date().toISOString();
+    const row = await dbGet(
+      'INSERT INTO clusters (up_id, type, start_date, end_date, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
+      [upId, type, startDate, endDate, 'open', now, now]
+    );
+    const clusterId = row.id;
+    
+    if (notes) {
+      await this.addClusterMessage(clusterId, 'system', notes);
+    }
+    return { id: clusterId, up_id: upId, type, start_date: startDate, end_date: endDate, status: 'open' };
+  },
+
+  async extendCluster(id, extendToDate, systemNotification) {
+    const now = new Date().toISOString();
+    await dbRun(
+      'UPDATE clusters SET end_date = $1, updated_at = $2 WHERE id = $3',
+      [extendToDate, now, id]
+    );
+    if (systemNotification) {
+      await this.addClusterMessage(id, 'system', systemNotification);
+    }
+    return true;
+  },
+
+  async closeCluster(id, resolutionCategory, resolutionNotes) {
+    const now = new Date().toISOString();
+    await dbRun(
+      "UPDATE clusters SET status = 'closed', updated_at = $1 WHERE id = $2",
+      [now, id]
+    );
+    
+    let resolutionMessage = `Problema marcato come RISOLTO. Categoria: ${resolutionCategory || 'Nessuna'}`;
+    if (resolutionNotes) {
+      resolutionMessage += `. Note: ${resolutionNotes}`;
+    }
+    await this.addClusterMessage(id, 'system', resolutionMessage);
+    return true;
+  },
+
+  async deleteCluster(id) {
+    await dbRun('DELETE FROM clusters WHERE id = $1', [id]);
+    await dbRun('DELETE FROM cluster_messages WHERE cluster_id = $1', [id]);
+    return true;
+  },
+
+  async addClusterMessage(clusterId, sender, messageText) {
+    const now = new Date().toISOString();
+    await dbRun(
+      'INSERT INTO cluster_messages (cluster_id, sender, message_text, created_at) VALUES ($1, $2, $3, $4)',
+      [clusterId, sender, messageText, now]
+    );
+    return true;
+  },
+
+  async getClusterMessages(clusterId) {
+    return await dbAll(
+      'SELECT * FROM cluster_messages WHERE cluster_id = $1 ORDER BY created_at ASC',
+      [clusterId]
+    );
+  },
+
+  async getLatestOpenCluster(upId, type) {
+    const row = await dbGet(
+      "SELECT * FROM clusters WHERE up_id = $1 AND type = $2 AND status = 'open' ORDER BY start_date DESC, created_at DESC LIMIT 1",
+      [upId, type]
+    );
+    return row || null;
   }
 };
