@@ -490,5 +490,35 @@ export const dbService = {
       [upId, type]
     );
     return row || null;
+  },
+
+  async getAllUPs() {
+    return await dbAll('SELECT * FROM registry ORDER BY id ASC');
+  },
+
+  async getUPById(id) {
+    return await dbGet('SELECT * FROM registry WHERE id = $1', [id]);
+  },
+
+  async saveUP(id, name, tech, region, capacity, lat, lon, ppaPartner, scadaDisabled) {
+    await dbRun(`
+      INSERT INTO registry (id, name, tech, region, capacity, lat, lon, ppa_partner, scada_disabled)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name,
+        tech = EXCLUDED.tech,
+        region = EXCLUDED.region,
+        capacity = EXCLUDED.capacity,
+        lat = EXCLUDED.lat,
+        lon = EXCLUDED.lon,
+        ppa_partner = EXCLUDED.ppa_partner,
+        scada_disabled = EXCLUDED.scada_disabled
+    `, [id, name, tech, region, capacity, lat || 0, lon || 0, ppaPartner || null, scadaDisabled ? 1 : 0]);
+    return true;
+  },
+
+  async deleteUP(id) {
+    await dbRun('DELETE FROM registry WHERE id = $1', [id]);
+    return true;
   }
 };

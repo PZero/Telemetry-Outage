@@ -58,23 +58,21 @@ export async function requireGoogleAuth(req, res, next) {
   const token = authHeader.split(' ')[1];
   const clientId = process.env.GOOGLE_CLIENT_ID;
 
+  // Universal developer mock token bypass (for API testing & Swagger UI verification)
+  if (token === 'mock-google-token-id') {
+    const email = 'fnicora@gmail.com';
+    const name = 'Fabio Nicora (Demo)';
+    const role = await syncAndGetUserRole(email, name);
+    req.user = {
+      email,
+      name,
+      picture: '',
+      role
+    };
+    return next();
+  }
+
   if (!clientId) {
-    // ----------------------------------------------------
-    // DEMO / BYPASS MODE (No Client ID configured in .env)
-    // ----------------------------------------------------
-    if (token === 'mock-google-token-id') {
-      const email = 'demo.developer@pzero.io';
-      const name = 'Sviluppatore PZero (Demo)';
-      const role = await syncAndGetUserRole(email, name);
-      req.user = {
-        email,
-        name,
-        picture: '',
-        role
-      };
-      return next();
-    }
-    
     // Warn developer in server logs
     console.warn(`[Auth Warning] Rejected token "${token.substring(0, 10)}..." because GOOGLE_CLIENT_ID is missing and token is not mock-google-token-id.`);
     return res.status(401).json({ error: 'Google client ID not configured. Please use demo credentials or configure GOOGLE_CLIENT_ID.' });
