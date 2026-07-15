@@ -430,6 +430,30 @@ function parseAzureDate(dateStr) {
   return new Date(Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day), parseInt(hours), parseInt(minutes), parseInt(seconds)));
 }
 
+function getRomeTimeParts(dateObj) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Rome",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  });
+  const parts = formatter.formatToParts(dateObj);
+  const partMap = {};
+  parts.forEach(p => partMap[p.type] = p.value);
+  
+  let hourVal = parseInt(partMap.hour, 10);
+  if (hourVal === 24) hourVal = 0;
+
+  return {
+    dateStr: `${partMap.year}-${partMap.month}-${partMap.day}`,
+    hours: hourVal,
+    minutes: parseInt(partMap.minute, 10)
+  };
+}
+
 function parseObservationResponse(rawData, upId, tech, date, type) {
   let steps = type === 'scada' && tech === 'Wind' ? 144 : 96;
   const root = Array.isArray(rawData) ? rawData[0] : rawData;
@@ -447,38 +471,34 @@ function parseObservationResponse(rawData, upId, tech, date, type) {
     const valueVal = item.value !== undefined ? item.value : item.valore;
     if (!dateVal || valueVal === undefined || valueVal === null) return;
     
-    const rawDateObj = parseAzureDate(dateVal);
-    if (!rawDateObj) return;
+    let rawDateObj = parseAzureDate(dateVal);
+    if (!rawDateObj) {
+      rawDateObj = new Date(dateVal);
+    }
+    if (!rawDateObj || isNaN(rawDateObj.getTime())) return;
 
-    const rawDateStr = rawDateObj.toISOString().split('T')[0];
-    const adjustedDateObj1 = new Date(rawDateObj.getTime() + 3600000);
-    const adjustedDateStr1 = adjustedDateObj1.toISOString().split('T')[0];
-    const adjustedDateObj2 = new Date(rawDateObj.getTime() + 7200000);
-    const adjustedDateStr2 = adjustedDateObj2.toISOString().split('T')[0];
-    
-    let useDateObj;
-    if (rawDateStr === date) {
-      useDateObj = rawDateObj;
-    } else if (adjustedDateStr1 === date) {
-      useDateObj = adjustedDateObj1;
-    } else if (adjustedDateStr2 === date) {
-      useDateObj = adjustedDateObj2;
-    } else {
-      skippedDates.add(rawDateStr);
+    // Apply the SCADA shift by subtracting 1 minute from the point time so that it aligns
+    // with the start of the interval (the user said: "i timestamps scada rappresentano la fine dell'intervallo, mentre quelli meter l'inizio")
+    let adjustedDateObj = rawDateObj;
+    if (type === "scada") {
+      adjustedDateObj = new Date(rawDateObj.getTime() - 60000); // subtract 1 minute (60,000 ms)
+    }
+
+    const romeParts = getRomeTimeParts(adjustedDateObj);
+    if (romeParts.dateStr !== date) {
+      skippedDates.add(romeParts.dateStr);
       return;
     }
 
-    const hours = useDateObj.getUTCHours();
-    const minutes = useDateObj.getUTCMinutes();
     let index;
     if (steps === 144) {
-      index = hours * 6 + Math.floor(minutes / 10);
+      index = romeParts.hours * 6 + Math.floor(romeParts.minutes / 10);
     } else {
-      index = hours * 4 + Math.floor(minutes / 15);
+      index = romeParts.hours * 4 + Math.floor(romeParts.minutes / 15);
     }
 
     if (index >= 0 && index < steps) {
-      values[index] = valueVal;
+      values[index] = Math.max(0, valueVal);
       matchedCount++;
     }
   });
