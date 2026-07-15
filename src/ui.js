@@ -13,6 +13,50 @@ import { getObservations, getOutagesForPeriod, getObservationRecord, preloadObse
 //   - Neither present, full outage            → GREY
 //   - UP marked as NO-SCADA, meter present    → GREEN
 //   - UP marked as NO-SCADA, meter absent     → RED
+function analyzeStreamGaps(values, stepsCount, isSolarShutdown) {
+  if (!values) return { isPresent: false, hasGaps: true, gapCount: stepsCount };
+  
+  let validCount = 0;
+  let gapCount = 0;
+  let hasErrorValues = false;
+  
+  const N = values.length;
+  for (let i = 0; i < N; i++) {
+    const val = values[i];
+    const hour = Math.floor(i / (N / 24));
+    const isNight = hour < 6 || hour >= 20;
+    
+    const isNull = val === null || val === undefined;
+    const isErrorStr = typeof val === 'string' && (
+      val.toLowerCase().includes('not available') ||
+      val.toLowerCase().includes('n/a') ||
+      val.toLowerCase().includes('error') ||
+      val.toLowerCase().includes('nan')
+    );
+    
+    if (isErrorStr) {
+      gapCount++;
+      hasErrorValues = true;
+    } else if (isNull) {
+      if (isSolarShutdown && isNight) {
+        // Allowed nighttime shutdown
+      } else {
+        gapCount++;
+      }
+    } else {
+      validCount++;
+    }
+  }
+  
+  return {
+    isPresent: validCount > 0,
+    hasGaps: gapCount > 0,
+    gapCount,
+    validCount,
+    hasErrorValues
+  };
+}
+
 export async function classifyDayIntegrity(up, dateStr) {
   const meterRecord = await getObservationRecord(up.id, dateStr, "meter");
   const scadaRecord = await getObservationRecord(up.id, dateStr, "scada");
@@ -34,10 +78,6 @@ export async function classifyDayIntegrity(up, dateStr) {
   const importedInDelay = meterDelay || (scadaRecord && scadaRecord.imported_in_delay) || false;
   const importDate = (meterDelay && meterRecord && meterRecord.import_date) || (scadaRecord && scadaRecord.imported_in_delay && scadaRecord.import_date) || null;
 
-  const countValids = (arr) => arr ? arr.filter(v => v !== null && v !== undefined).length : 0;
-  const meterValids = countValids(meterValues);
-  const scadaValids = countValids(scadaValues);
-
   const stepsMeter = meterValues ? meterValues.length : 96;
   const stepsScada = scadaValues ? scadaValues.length : (up.tech === "Wind" ? 144 : 96);
 
@@ -51,13 +91,21 @@ export async function classifyDayIntegrity(up, dateStr) {
   }
   apiErrorMessage = apiErrorMessage.trim();
 
+  const isSolarShutdown = up.tech === "Solar" && (up.solar_shutdown === true || up.solar_shutdown === 1);
+  const noScada = up.scada_disabled === true || up.scada_disabled === 1;
+
+  const meterAnalysis = analyzeStreamGaps(meterValues, stepsMeter, isSolarShutdown);
+  const scadaAnalysis = noScada
+    ? { isPresent: true, hasGaps: false, gapCount: 0, validCount: stepsScada }
+    : analyzeStreamGaps(scadaValues, stepsScada, isSolarShutdown);
+
   const wrapResult = (status) => ({
     status,
     importedInDelay,
     importDate,
-    meterValids,
+    meterValids: meterAnalysis.validCount,
     meterSteps: stepsMeter,
-    scadaValids,
+    scadaValids: scadaAnalysis.validCount,
     scadaSteps: stepsScada,
     apiError: isApiError,
     apiErrorMessage,
@@ -65,33 +113,8 @@ export async function classifyDayIntegrity(up, dateStr) {
     scadaValues
   });
 
-  // Determine presence: a stream is "present" if it has at least some valid (non-null) values
-  const meterPresent = meterValids > 0;
-  // For SCADA-disabled UPs, we treat SCADA as "not applicable" (virtually present)
-  const noScada = up.scada_disabled === true || up.scada_disabled === 1;
-  const scadaPresent = noScada ? true : scadaValids > 0;
-
-  if (meterPresent && scadaPresent) {
-    // Both present → check if fully complete or has gaps
-    const meterFull = meterValues && meterValids === stepsMeter;
-    const scadaFull = noScada || (scadaValues && scadaValids === stepsScada);
-
-    if (meterFull && scadaFull) {
-      return wrapResult("green");
-    }
-
-    // Has some data but not full — check if gaps are justified by outages
-    if (outages.length > 0) {
-      const totalOutage = outages.some(o => o.reductionPercentage === 100);
-      if (totalOutage) return wrapResult("grey");
-    }
-
-    // Partial data present — still green if both streams exist even if not 100%
-    return wrapResult("green");
-  }
-
-  if (!meterPresent && !scadaPresent) {
-    // Neither present → check if justified by a full-day outage
+  // If no data exists for both, check if justified by outage
+  if (!meterAnalysis.isPresent && !scadaAnalysis.isPresent) {
     if (outages.length > 0) {
       const totalOutage = outages.some(o => o.reductionPercentage === 100);
       return wrapResult(totalOutage ? "grey" : "red");
@@ -99,13 +122,16 @@ export async function classifyDayIntegrity(up, dateStr) {
     return wrapResult("red");
   }
 
-  // Only one stream present → ORANGE (yellow)
-  // If there's a total outage justifying the missing stream, classify as grey
-  if (outages.length > 0) {
-    const totalOutage = outages.some(o => o.reductionPercentage === 100);
-    if (totalOutage) return wrapResult("grey");
+  // If either has gaps (unjustified), classify as orange
+  if (meterAnalysis.hasGaps || scadaAnalysis.hasGaps) {
+    if (outages.length > 0) {
+      const totalOutage = outages.some(o => o.reductionPercentage === 100);
+      if (totalOutage) return wrapResult("grey");
+    }
+    return wrapResult("orange");
   }
-  return wrapResult("orange");
+
+  return wrapResult("green");
 }
 
 /**

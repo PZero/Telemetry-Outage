@@ -5,7 +5,7 @@ window.onerror = function(message, source, lineno, colno, error) {
   alert(`[App Error Boundary]\nUn errore imprevisto ha bloccato l'applicazione:\n\n${message}\n\nFile: ${source.substring(source.lastIndexOf('/') + 1)} (riga ${lineno})`);
 };
 
-import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry } from "./registry.js";
+import { getUPById, UP_REGISTRY, UNIQUE_REGIONS, isScadaDisabled, setScadaDisabled, loadUPRegistry, isSolarShutdown, setSolarShutdown } from "./registry.js";
 import { initDB, clearDatabase, deleteOlderThan, getPersistenceStatus, getObservations, saveObservations, saveOutages, clearClientCaches } from "./db.js";
 import { isSimulatedMode, setSimulatedMode, getAuthHeaders, fetchObservations, fetchOutages, fetchObservationsRange } from "./api.js";
 import { renderFleetHeatmap, renderUPDailyRibbons, renderProfileChart, classifyDayIntegrity, renderFleetStats, renderAuditReportPanel } from "./ui.js";
@@ -1010,10 +1010,27 @@ async function renderDeepDivePanel() {
     const noScadaCb = document.getElementById("detail-up-noscada-cb");
     if (noScadaCb) {
       noScadaCb.checked = isScadaDisabled(up.id);
-      noScadaCb.onclick = (e) => {
-        setScadaDisabled(up.id, e.target.checked);
+      noScadaCb.onclick = async (e) => {
+        await setScadaDisabled(up.id, e.target.checked);
         updateSettingsLogs(`[Registry Change] UP ${up.name} (${up.id}) impostata come ${e.target.checked ? "NON censita" : "censita"} SCADA.`);
+        await refreshCellStatusCached(up.id, targetDateStr);
       };
+    }
+
+    const solarShutdownContainer = document.getElementById("detail-up-solarshutdown-container");
+    const solarShutdownCb = document.getElementById("detail-up-solarshutdown-cb");
+    if (solarShutdownContainer && solarShutdownCb) {
+      if (up.tech === 'Solar') {
+        solarShutdownContainer.style.display = "flex";
+        solarShutdownCb.checked = isSolarShutdown(up.id);
+        solarShutdownCb.onclick = async (e) => {
+          await setSolarShutdown(up.id, e.target.checked);
+          updateSettingsLogs(`[Registry Change] UP ${up.name} (${up.id}) impostata con Spegnimento Notturno = ${e.target.checked ? "ATTIVO" : "DISATTIVO"}.`);
+          await refreshCellStatusCached(up.id, targetDateStr);
+        };
+      } else {
+        solarShutdownContainer.style.display = "none";
+      }
     }
 
     const container = document.getElementById("detail-ribbons-container");

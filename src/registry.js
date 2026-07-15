@@ -64,6 +64,7 @@ export async function loadUPRegistry() {
       u.ppaTag = u.ppa_partner || u.ppaTag || null;
       delete u.ppa_partner; // Prevent database override of updated ppaTag values
       u.scada_disabled = u.scada_disabled === 1 || u.scada_disabled === true;
+      u.solar_shutdown = u.solar_shutdown === 1 || u.solar_shutdown === true;
       return u;
     }));
     updateUniqueRegions();
@@ -156,6 +157,32 @@ export async function setScadaDisabled(upId, disabled) {
     return true;
   } catch (err) {
     console.error('[Registry Proxy] setScadaDisabled failed:', err);
+    return false;
+  }
+}
+
+export function isSolarShutdown(upId) {
+  const up = getUPById(upId);
+  return up ? (up.solar_shutdown === true || up.solar_shutdown === 1) : false;
+}
+
+export async function setSolarShutdown(upId, enabled) {
+  try {
+    const response = await fetch(`${BASE_URL}/api/registry/update`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ upId, solarShutdown: enabled })
+    });
+    if (!response.ok) throw new Error(`HTTP error ${response.status}`);
+    
+    // Update local state in memory
+    const up = getUPById(upId);
+    if (up) up.solar_shutdown = enabled;
+    
+    console.log(`[Registry] Solar shutdown status updated for ${upId} to:`, enabled);
+    return true;
+  } catch (err) {
+    console.error('[Registry Proxy] setSolarShutdown failed:', err);
     return false;
   }
 }

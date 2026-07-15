@@ -44,6 +44,50 @@ function chunkArray(array, size) {
   return chunks;
 }
 
+function analyzeStreamGaps(values, stepsCount, isSolarShutdown) {
+  if (!values) return { isPresent: false, hasGaps: true, gapCount: stepsCount };
+  
+  let validCount = 0;
+  let gapCount = 0;
+  let hasErrorValues = false;
+  
+  const N = values.length;
+  for (let i = 0; i < N; i++) {
+    const val = values[i];
+    const hour = Math.floor(i / (N / 24));
+    const isNight = hour < 6 || hour >= 20;
+    
+    const isNull = val === null || val === undefined;
+    const isErrorStr = typeof val === 'string' && (
+      val.toLowerCase().includes('not available') ||
+      val.toLowerCase().includes('n/a') ||
+      val.toLowerCase().includes('error') ||
+      val.toLowerCase().includes('nan')
+    );
+    
+    if (isErrorStr) {
+      gapCount++;
+      hasErrorValues = true;
+    } else if (isNull) {
+      if (isSolarShutdown && isNight) {
+        // Allowed nighttime shutdown
+      } else {
+        gapCount++;
+      }
+    } else {
+      validCount++;
+    }
+  }
+  
+  return {
+    isPresent: validCount > 0,
+    hasGaps: gapCount > 0,
+    gapCount,
+    validCount,
+    hasErrorValues
+  };
+}
+
 async function classifyDayIntegrity(up, dateStr) {
   const meterValues = await dbService.getObservations(up.id, dateStr, 'meter');
   const scadaValues = await dbService.getObservations(up.id, dateStr, 'scada');
@@ -57,11 +101,19 @@ async function classifyDayIntegrity(up, dateStr) {
     return start <= dayEnd && end >= dayStart;
   });
 
-  const countValids = (arr) => arr ? arr.filter(v => v !== null && v !== undefined).length : 0;
-  const meterValids = countValids(meterValues);
-  const scadaValids = countValids(scadaValues);
+  const isSolarShutdown = (up.tech === 'Solar' && (up.solar_shutdown === 1 || up.solar_shutdown === true));
+  const noScada = (up.scada_disabled === 1 || up.scada_disabled === true);
 
-  if (!meterValues && !scadaValues) {
+  const stepsMeter = meterValues ? meterValues.length : 96;
+  const stepsScada = scadaValues ? scadaValues.length : (up.tech === 'Wind' ? 144 : 96);
+
+  const meterAnalysis = analyzeStreamGaps(meterValues, stepsMeter, isSolarShutdown);
+  const scadaAnalysis = noScada 
+    ? { isPresent: true, hasGaps: false, gapCount: 0, validCount: stepsScada }
+    : analyzeStreamGaps(scadaValues, stepsScada, isSolarShutdown);
+
+  // If no data exists for both, check if justified by outage
+  if (!meterAnalysis.isPresent && !scadaAnalysis.isPresent) {
     if (dayOutages.length > 0) {
       const totalOutage = dayOutages.some(o => o.reductionPercentage === 100);
       return totalOutage ? 'grey' : 'red';
@@ -69,19 +121,12 @@ async function classifyDayIntegrity(up, dateStr) {
     return 'red';
   }
 
-  const stepsMeter = meterValues ? meterValues.length : 96;
-  const stepsScada = scadaValues ? scadaValues.length : (up.tech === 'Wind' ? 144 : 96);
-
-  if (up.scada_disabled || up.scada_disabled === 1) {
-    if (meterValids === stepsMeter) return 'green';
+  // If either has gaps (unjustified), classify as orange
+  if (meterAnalysis.hasGaps || scadaAnalysis.hasGaps) {
     return 'orange';
   }
 
-  if (meterValids === stepsMeter && scadaValids === stepsScada) {
-    return 'green';
-  }
-
-  return 'orange';
+  return 'green';
 }
 
 export async function startSync(params, proxyToAzure) {

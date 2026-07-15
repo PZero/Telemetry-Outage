@@ -624,11 +624,11 @@ app.post('/api/registry/reset', requireAdmin, async (req, res) => {
 
 app.post('/api/registry/update', async (req, res) => {
   try {
-    const { upId, ppaPartner, scadaDisabled } = req.body;
+    const { upId, ppaPartner, scadaDisabled, solarShutdown } = req.body;
     if (!upId) {
       return res.status(400).json({ error: 'Missing required field upId.' });
     }
-    await dbService.updateUPPpaAndScada(upId, ppaPartner, scadaDisabled);
+    await dbService.updateUPPpaAndScada(upId, ppaPartner, scadaDisabled, solarShutdown);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -1193,7 +1193,9 @@ app.post('/api/agent/registry/ups', requireGoogleAuth, requireAdmin, async (req,
     if (!up.id || !up.name || !up.tech || !up.region || up.capacity === undefined) {
       return res.status(400).json({ error: 'Missing required fields: id, name, tech, region, capacity.' });
     }
-    await dbService.saveUP(up.id, up.name, up.tech, up.region, up.capacity, up.lat || 0, up.lon || 0, up.ppa_partner || null, up.scada_disabled ? 1 : 0);
+    const scada = up.scada_disabled ? 1 : 0;
+    const solarShutdown = (up.solar_shutdown === true || up.solar_shutdown === 1 || up.solarShutdown === true) ? 1 : 0;
+    await dbService.saveUP(up.id, up.name, up.tech, up.region, up.capacity, up.lat || 0, up.lon || 0, up.ppa_partner || null, scada, solarShutdown);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

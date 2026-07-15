@@ -116,9 +116,17 @@ async function initializeTables() {
         lat DOUBLE PRECISION,
         lon DOUBLE PRECISION,
         ppa_partner TEXT,
-        scada_disabled INTEGER DEFAULT 0
+        scada_disabled INTEGER DEFAULT 0,
+        solar_shutdown INTEGER DEFAULT 0
       )
     `);
+
+    // Add solar_shutdown column to registry table if it doesn't exist (migration for existing database)
+    try {
+      await dbRun(`ALTER TABLE registry ADD COLUMN IF NOT EXISTS solar_shutdown INTEGER DEFAULT 0`);
+    } catch (e) {
+      console.log('[PG Migration] "solar_shutdown" column already exists or failed to add:', e.message);
+    }
 
     // 4. PPA Tags Table
     await dbRun(`
@@ -328,10 +336,11 @@ export const dbService = {
     for (const up of upList) {
       const ppa = up.ppa_partner || up.ppaTag || null;
       const scada = (up.scada_disabled === true || up.scada_disabled === 1) ? 1 : 0;
+      const solarShutdown = (up.solar_shutdown === true || up.solar_shutdown === 1) ? 1 : 0;
       await dbRun(`
-        INSERT INTO registry (id, name, tech, region, capacity, lat, lon, ppa_partner, scada_disabled)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      `, [up.id, up.name, up.tech, up.region, up.capacity, up.lat, up.lon, ppa, scada]);
+        INSERT INTO registry (id, name, tech, region, capacity, lat, lon, ppa_partner, scada_disabled, solar_shutdown)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `, [up.id, up.name, up.tech, up.region, up.capacity, up.lat, up.lon, ppa, scada, solarShutdown]);
     }
     return true;
   },
@@ -342,14 +351,15 @@ export const dbService = {
     return true;
   },
 
-  async updateUPPpaAndScada(upId, ppaPartner, scadaDisabled) {
-    if (ppaPartner !== undefined && scadaDisabled !== undefined) {
-      await dbRun('UPDATE registry SET ppa_partner = $1, scada_disabled = $2 WHERE id = $3',
-        [ppaPartner, scadaDisabled ? 1 : 0, upId]);
-    } else if (ppaPartner !== undefined) {
+  async updateUPPpaAndScada(upId, ppaPartner, scadaDisabled, solarShutdown) {
+    if (ppaPartner !== undefined) {
       await dbRun('UPDATE registry SET ppa_partner = $1 WHERE id = $2', [ppaPartner, upId]);
-    } else if (scadaDisabled !== undefined) {
+    }
+    if (scadaDisabled !== undefined) {
       await dbRun('UPDATE registry SET scada_disabled = $1 WHERE id = $2', [scadaDisabled ? 1 : 0, upId]);
+    }
+    if (solarShutdown !== undefined) {
+      await dbRun('UPDATE registry SET solar_shutdown = $1 WHERE id = $2', [solarShutdown ? 1 : 0, upId]);
     }
     return true;
   },
@@ -519,10 +529,10 @@ export const dbService = {
     return await dbGet('SELECT * FROM registry WHERE id = $1', [id]);
   },
 
-  async saveUP(id, name, tech, region, capacity, lat, lon, ppaPartner, scadaDisabled) {
+  async saveUP(id, name, tech, region, capacity, lat, lon, ppaPartner, scadaDisabled, solarShutdown = 0) {
     await dbRun(`
-      INSERT INTO registry (id, name, tech, region, capacity, lat, lon, ppa_partner, scada_disabled)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      INSERT INTO registry (id, name, tech, region, capacity, lat, lon, ppa_partner, scada_disabled, solar_shutdown)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name,
         tech = EXCLUDED.tech,
@@ -531,8 +541,9 @@ export const dbService = {
         lat = EXCLUDED.lat,
         lon = EXCLUDED.lon,
         ppa_partner = EXCLUDED.ppa_partner,
-        scada_disabled = EXCLUDED.scada_disabled
-    `, [id, name, tech, region, capacity, lat || 0, lon || 0, ppaPartner || null, scadaDisabled ? 1 : 0]);
+        scada_disabled = EXCLUDED.scada_disabled,
+        solar_shutdown = EXCLUDED.solar_shutdown
+    `, [id, name, tech, region, capacity, lat || 0, lon || 0, ppaPartner || null, scadaDisabled ? 1 : 0, solarShutdown ? 1 : 0]);
     return true;
   },
 
