@@ -67,7 +67,7 @@ const swaggerOptions = {
       }
     ]
   },
-  apis: ['./backend/server.js']
+  apis: [join(dirname(fileURLToPath(import.meta.url)), 'server.js')]
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
