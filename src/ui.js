@@ -110,7 +110,9 @@ export async function classifyDayIntegrity(up, dateStr) {
     apiError: isApiError,
     apiErrorMessage,
     meterValues,
-    scadaValues
+    scadaValues,
+    meterHasGaps: meterAnalysis.hasGaps,
+    scadaHasGaps: scadaAnalysis.hasGaps
   });
 
   // If no data exists for both, check if justified by outage
@@ -327,8 +329,8 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
       const status = statusObj ? statusObj.status : null;
       const isDelay = statusObj ? statusObj.importedInDelay : false;
       const isApiError = statusObj ? statusObj.apiError : false;
-      const isMeterIncomplete = statusObj ? (statusObj.meterValids < 96) : false;
-      const isScadaIncomplete = (!noScada && statusObj) ? (statusObj.scadaValids < statusObj.scadaSteps) : false;
+      const isMeterIncomplete = statusObj ? (statusObj.meterHasGaps === true) : false;
+      const isScadaIncomplete = (!noScada && statusObj) ? (statusObj.scadaHasGaps === true) : false;
       const isIncomplete = isMeterIncomplete || isScadaIncomplete;
       const x = labelWidth + c * colWidth;
 

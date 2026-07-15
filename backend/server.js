@@ -592,7 +592,8 @@ app.get('/api/registry', async (req, res) => {
       lat: up.lat,
       lon: up.lon,
       ppa_partner: up.ppa_partner,
-      scada_disabled: up.scada_disabled === 1
+      scada_disabled: up.scada_disabled === 1,
+      solar_shutdown: up.solar_shutdown === 1
     }));
     res.json(formatted);
   } catch (error) {
