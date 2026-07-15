@@ -43,13 +43,49 @@ const swaggerOptions = {
     info: {
       title: 'Telemetry & Outage Integrity API',
       version: '1.0.0',
-      description: 'API REST per la gestione delle telemetrie, fermi impianto (outage), cluster di anomalie e anagrafica degli impianti.\n\n' +
-        '### Sequenza Operativa Consigliata per l\'Agente AI:\n' +
-        '1. **Rilevamento**: L\'agente analizza i dati o esegue `/api/agent/diagnostics/test-day` per verificare le anomalie.\n' +
-        '2. **Ingaggio**: L\'agente chiama `/api/agent/clusters/latest` per recuperare o inizializzare il cluster aperto e la relativa chat.\n' +
-        '3. **Interazione**: Se il problema persiste nei giorni successivi, l\'agente chiama `/api/agent/clusters/{id}/extend` per estendere il periodo.\n' +
-        '4. **Comunicazione**: Scrive o legge i messaggi in chat scambiati con i process owner tramite `/api/agent/clusters/{id}/messages`.\n' +
-        '5. **Chiusura**: Una volta risolto, l\'agente chiama `/api/agent/clusters/{id}/close` per risolvere e chiudere il cluster.',
+      description: `### Manuale Operativo e Sequenze API per Agenti AI & Copilot
+
+Benvenuto nella documentazione delle API REST per il sistema **UP Data Check**. Questa suite di servizi consente a componenti esterne, frontend e agenti autonomi (es. Microsoft Copilot Studio) di gestire l'integrità dei dati di produzione, tracciare anomalie, configurare anagrafiche e automatizzare la comunicazione con i process owner.
+
+---
+
+## 1. Moduli Principali delle API
+
+### A. Registro & Anagrafica (Registry)
+Consente di censire e configurare le Unità di Produzione (UP) e i Partner commerciali associati tramite contratti PPA.
+* **UP Registry** (\`/api/agent/registry/ups\`): Gestisce le UP della flotta. Supporta operazioni CRUD per aggiungere, modificare o rimuovere impianti (es. eolico/solare).
+* **PPA Partners** (\`/api/agent/registry/ppa-partners\`): Gestisce i partner contrattuali PPA e i colori identificativi associati.
+* **Assegnazioni & Disabilitazioni** (\`/api/agent/registry/assign\`): Permette di legare una UP a un partner PPA specifico o di disabilitare l'acquisizione delle telemetrie SCADA (es. in caso di manutenzioni pianificate o guasti noti, evitando falsi allarmi).
+
+### B. Diagnostica & Report (Diagnostics & Reports)
+Fornisce strumenti di controllo on-demand ed elaborazioni complessive.
+* **Test Giornaliero** (\`/api/agent/diagnostics/test-day\`): Consente di forzare un'analisi di integrità immediata per una specifica UP in un determinato giorno. Analizza le letture Meter e SCADA presenti, calcolando i gaps e confrontandoli con gli outages dichiarati.
+* **Audit Report** (\`/api/agent/reports/audit\`): Genera un bilancio complessivo di allineamento e anomalie per l'intera flotta in un intervallo di date, fornendo metriche aggregate di efficienza e conformità.
+
+### C. Gestione dei Cluster di Anomalie (Workflow & Chat)
+Gestisce i ticket di anomalia in corso e la chat associata per ciascun impianto.
+* **Lazy Creation del Cluster** (\`/api/agent/clusters/latest\`): Questo endpoint è il fulcro del workflow. Quando interrogato per una specifica UP e tipologia di errore, controlla se esiste già un cluster aperto (\`status = 'open'\`).
+  - **Se esiste**: lo restituisce all'istante per riprendere la gestione.
+  - **Se NON esiste**: **forza automaticamente la creazione di un nuovo cluster** nel database e restituisce il record appena creato. Questo garantisce all'agente di avere sempre un cluster/ticket valido di riferimento su cui agganciare i messaggi o le estensioni.
+* **Estensione del Cluster** (\`/api/agent/clusters/{id}/extend\`): Se un'anomalia persiste nei giorni successivi, l'agente non deve aprire un nuovo ticket (che frammenterebbe la comunicazione), ma deve chiamare questo endpoint per estendere la validità del cluster corrente fino a una nuova data.
+* **Risoluzione & Chiusura** (\`/api/agent/clusters/{id}/close\`): Consente di chiudere il cluster inserendo note di risoluzione e la categoria dell'intervento.
+* **Messaggistica Chat** (\`/api/agent/clusters/{id}/messages\`): Consente di leggere la cronologia e inviare messaggi di chat per coordinarsi con i process owner fino alla risoluzione del problema.
+
+---
+
+## 2. Esempi Completi di Flusso (Sequenze)
+
+### Scenario A: Rilevamento e Gestione di un'Anomalia (Workflow Tipo)
+1. **Analisi/Rilevamento**: L'agente esegue \`POST /api/agent/diagnostics/test-day\` per verificare i dati del giorno precedente di un impianto.
+2. **Ingaggio**: Se il test rileva disallineamenti significativi (es. mancano dati SCADA), l'agente interroga \`GET /api/agent/clusters/latest?upId=UP_WIND_01&type=scada\`. L'endpoint recupera il cluster esistente o, se è il primo giorno in cui si presenta il problema, **crea automaticamente** un nuovo cluster aperto (es. \`id = 12\`).
+3. **Avviso Chat**: L'agente scrive sulla chat dell'anomalia (\`POST /api/agent/clusters/12/messages\`) notificando i process owner del problema rilevato.
+4. **Persistenza (Giorno 2)**: Il giorno dopo, l'agente rileva che il problema persiste. Esegue \`POST /api/agent/clusters/12/extend\` per allungare il cluster a oggi, e invia un nuovo messaggio di sollecito in chat.
+5. **Risoluzione**: Una volta che i tecnici correggono l'allineamento o riparano il sensore, l'agente invia \`POST /api/agent/clusters/12/close\` con la risoluzione, chiudendo ufficialmente la pratica.
+
+### Scenario B: Manutenzione e Configurazione Impianto
+1. **Creazione UP**: L'amministratore/agente aggiunge un nuovo impianto con \`POST /api/agent/registry/ups\`.
+2. **Configurazione Partner**: Crea una controparte commerciale con \`POST /api/agent/registry/ppa-partners\`.
+3. **Associazione**: Associa l'impianto al partner PPA con \`POST /api/agent/registry/assign\`.`,
     },
     servers: [
       {
