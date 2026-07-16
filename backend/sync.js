@@ -315,7 +315,7 @@ async function runBackgroundLoop(proxyToAzure) {
   }
 }
 
-async function fetchObservationsFromAzureRange(upId, startDate, endDate, type, simulated, proxyToAzure, upTech, upName) {
+export async function fetchObservationsFromAzureRange(upId, startDate, endDate, type, simulated, proxyToAzure, upTech, upName) {
   if (simulated) {
     const results = {};
     const start = new Date(`${startDate}T00:00:00Z`);
@@ -375,7 +375,7 @@ async function fetchObservationsFromAzureRange(upId, startDate, endDate, type, s
   return results;
 }
 
-async function fetchOutagesFromAzureRange(upId, startDate, endDate, simulated, proxyToAzure) {
+export async function fetchOutagesFromAzureRange(upId, startDate, endDate, simulated, proxyToAzure) {
   if (simulated) {
     return generateMockOutages(upId, startDate, endDate);
   }

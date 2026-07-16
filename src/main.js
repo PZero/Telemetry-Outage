@@ -710,7 +710,7 @@ function navigateToView(viewName) {
   state.view = viewName;
 
   // Hide all view panels safely
-  const views = ["fleet-heatmap-view", "fleet-stats-view", "detail-deepdive-view", "settings-view", "ppa-view", "audit-view"];
+  const views = ["fleet-heatmap-view", "fleet-stats-view", "detail-deepdive-view", "settings-view", "ppa-view", "audit-view", "export-view"];
   views.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.add("hidden");
@@ -726,6 +726,7 @@ function navigateToView(viewName) {
     fleet: document.getElementById("nav-fleet-btn"),
     stats: document.getElementById("nav-stats-btn"),
     audit: document.getElementById("nav-audit-btn"),
+    export: document.getElementById("nav-export-btn"),
     ppa: document.getElementById("nav-ppa-btn"),
     settings: document.getElementById("nav-settings-btn")
   };
@@ -753,7 +754,8 @@ function navigateToView(viewName) {
     detail: "detail-deepdive-view",
     ppa: "ppa-view",
     settings: "settings-view",
-    audit: "audit-view"
+    audit: "audit-view",
+    export: "export-view"
   };
   const targetId = viewIdMap[viewName];
   const targetEl = targetId ? document.getElementById(targetId) : null;
@@ -780,6 +782,8 @@ function navigateToView(viewName) {
     printDatabaseDiagnostics();
   } else if (viewName === "audit") {
     applyFiltersAndRender();
+  } else if (viewName === "export") {
+    initExportView();
   }
 }
 window.navigateToView = navigateToView;
@@ -800,6 +804,9 @@ function setupViewRouting() {
 
   const auditBtn = document.getElementById("nav-audit-btn");
   if (auditBtn) auditBtn.onclick = () => navigateToView("audit");
+
+  const navExportBtn = document.getElementById("nav-export-btn");
+  if (navExportBtn) navExportBtn.onclick = () => navigateToView("export");
 
   const ppaBtn = document.getElementById("nav-ppa-btn");
   if (ppaBtn) ppaBtn.onclick = () => navigateToView("ppa");
@@ -2756,4 +2763,160 @@ async function loadUsersTable() {
   } finally {
     if (refreshBtn) refreshBtn.disabled = false;
   }
+}
+
+let isExportInitialized = false;
+
+function initExportView() {
+  const upSelect = document.getElementById("export-up-select");
+  const startDateInput = document.getElementById("export-start-date");
+  const endDateInput = document.getElementById("export-end-date");
+  const exportBtn = document.getElementById("export-btn");
+  const exportCsvBtn = document.getElementById("export-csv-btn");
+  const loadingIndicator = document.getElementById("export-loading-indicator");
+  const previewTbody = document.getElementById("export-preview-tbody");
+  const rowCountSpan = document.getElementById("export-row-count");
+
+  if (!upSelect || !startDateInput || !endDateInput) return;
+
+  // 1. Populate UP select (if not already populated)
+  if (upSelect.children.length <= 1) {
+    upSelect.innerHTML = '<option value="" disabled selected>Seleziona un\'UP...</option>';
+    const sortedUPs = [...UP_REGISTRY].sort((a, b) => a.id.localeCompare(b.id));
+    sortedUPs.forEach(up => {
+      const opt = document.createElement("option");
+      opt.value = up.id;
+      opt.innerText = `${up.id} - ${up.name}`;
+      upSelect.appendChild(opt);
+    });
+  }
+
+  // 2. Set default dates (Dal: ieri, Al: ieri)
+  if (!startDateInput.value) {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const dateStr = yesterday.toISOString().split("T")[0];
+    startDateInput.value = dateStr;
+    endDateInput.value = dateStr;
+  }
+
+  // 3. Prevent duplicate event handler attachment
+  if (isExportInitialized) return;
+  isExportInitialized = true;
+
+  // 4. Hook fetch/sync button
+  exportBtn.onclick = async () => {
+    const upId = upSelect.value;
+    const startDate = startDateInput.value;
+    const endDate = endDateInput.value;
+
+    if (!upId) {
+      alert("Per favore seleziona un'Unità di Produzione (UP).");
+      return;
+    }
+    if (!startDate || !endDate) {
+      alert("Per favore seleziona un intervallo temporale valido.");
+      return;
+    }
+    if (startDate > endDate) {
+      alert("La data di inizio non può essere successiva alla data di fine.");
+      return;
+    }
+
+    // Show loading
+    loadingIndicator.style.display = "inline-flex";
+    exportBtn.disabled = true;
+    exportCsvBtn.style.display = "none";
+    previewTbody.innerHTML = '<tr><td colspan="3" style="padding: 30px; text-align: center; color: var(--text-muted);">Caricamento dati in corso...</td></tr>';
+    rowCountSpan.innerText = "0 righe caricate";
+
+    try {
+      const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      const response = await fetch(`${BASE_URL}/api/registry/sync-range`, {
+        method: "POST",
+        headers: {
+          ...getAuthHeaders(),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ upId, startDate, endDate })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Errore server (${response.status})`);
+      }
+
+      const data = await response.json();
+      state.exportData = data.timeseries || [];
+      state.exportUpId = upId;
+      state.exportStartDate = startDate;
+      state.exportEndDate = endDate;
+
+      // Render Preview (Max 200 rows to keep UI snappy, but all are downloadable)
+      if (state.exportData.length === 0) {
+        previewTbody.innerHTML = '<tr><td colspan="3" style="padding: 30px; text-align: center; color: var(--text-muted);">Nessun dato trovato per il periodo selezionato.</td></tr>';
+        rowCountSpan.innerText = "0 righe caricate";
+        exportCsvBtn.style.display = "none";
+      } else {
+        rowCountSpan.innerText = `${state.exportData.length} righe caricate`;
+        exportCsvBtn.style.display = "inline-block";
+
+        let html = "";
+        const previewRows = state.exportData.slice(0, 200);
+        previewRows.forEach(row => {
+          const mVal = row.meter !== null ? Number(row.meter).toFixed(3) : "-";
+          const sVal = row.scada !== null ? Number(row.scada).toFixed(3) : "-";
+          html += `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.02);">
+              <td style="padding: 8px 20px; font-family: var(--font-mono); font-weight: 600; color: #f3f4f6;">${row.timestamp}</td>
+              <td style="padding: 8px 20px; font-family: var(--font-mono); color: #60a5fa;">${mVal}</td>
+              <td style="padding: 8px 20px; font-family: var(--font-mono); color: #34d399;">${sVal}</td>
+            </tr>
+          `;
+        });
+        if (state.exportData.length > 200) {
+          html += `
+            <tr>
+              <td colspan="3" style="padding: 10px; text-align: center; color: var(--text-muted); font-style: italic;">
+                ...mostrate solo le prime 200 righe di anteprima su ${state.exportData.length} totali. Clicca su "Scarica CSV" per scaricarle tutte.
+              </td>
+            </tr>
+          `;
+        }
+        previewTbody.innerHTML = html;
+      }
+    } catch (err) {
+      console.error("[Export View] Fetch error:", err);
+      previewTbody.innerHTML = `<tr><td colspan="3" style="padding: 30px; text-align: center; color: #ef4444;">Errore durante l'acquisizione dei dati: ${err.message || err}</td></tr>`;
+      alert(`Errore: ${err.message || err}`);
+    } finally {
+      loadingIndicator.style.display = "none";
+      exportBtn.disabled = false;
+    }
+  };
+
+  // 5. Hook CSV download button
+  exportCsvBtn.onclick = () => {
+    if (!state.exportData || state.exportData.length === 0) return;
+
+    // Build CSV content
+    const headers = ["Data_Ora_Local_Time", "Meter_MW", "Scada_MW"];
+    const rows = state.exportData.map(row => {
+      const mVal = row.meter !== null ? row.meter : "";
+      const sVal = row.scada !== null ? row.scada : "";
+      return `"${row.timestamp}",${mVal},${sVal}`;
+    });
+
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", `telemetrie_${state.exportUpId}_${state.exportStartDate}_to_${state.exportEndDate}.csv`);
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 }

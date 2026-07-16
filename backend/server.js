@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { dbService } from './database.js';
 import { enqueueRequest, getQueueStatus } from './queue.js';
 import { requireGoogleAuth, requireAdmin } from './auth.js';
-import { startSync, cancelSync, getSyncStatus } from './sync.js';
+import { startSync, cancelSync, getSyncStatus, fetchObservationsFromAzureRange, fetchOutagesFromAzureRange } from './sync.js';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 
@@ -631,6 +631,122 @@ app.post('/api/registry/update', async (req, res) => {
     }
     await dbService.updateUPPpaAndScada(upId, ppaPartner, scadaDisabled, solarShutdown);
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/registry/sync-range', requireGoogleAuth, async (req, res) => {
+  try {
+    const { upId, startDate, endDate } = req.body;
+    if (!upId || !startDate || !endDate) {
+      return res.status(400).json({ error: 'Missing required fields: upId, startDate, endDate.' });
+    }
+    
+    const up = await dbService.getUPById(upId);
+    if (!up) {
+      return res.status(404).json({ error: `UP not found: ${upId}` });
+    }
+
+    const simMode = (process.env.AZURE_MOCK_TELEMETRY === 'true') || 
+                    !(process.env.AZURE_TENANT_ID && process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET);
+
+    // 1. Fetch and save meter observations
+    let meterResults;
+    try {
+      meterResults = await fetchObservationsFromAzureRange(upId, startDate, endDate, 'meter', simMode, proxyToAzure, up.tech, up.name);
+    } catch (err) {
+      console.warn(`[Sync Range] Azure fetch failed for meter, falling back to simulated data: ${err.message}`);
+      meterResults = await fetchObservationsFromAzureRange(upId, startDate, endDate, 'meter', true, proxyToAzure, up.tech, up.name);
+    }
+    for (const dateStr of Object.keys(meterResults)) {
+      await dbService.saveObservations(upId, dateStr, 'meter', meterResults[dateStr]);
+    }
+
+    // 2. Fetch and save scada observations if not disabled
+    const noScada = up.scada_disabled === 1 || up.scada_disabled === true;
+    let scadaResults = {};
+    if (!noScada) {
+      try {
+        scadaResults = await fetchObservationsFromAzureRange(upId, startDate, endDate, 'scada', simMode, proxyToAzure, up.tech, up.name);
+      } catch (err) {
+        console.warn(`[Sync Range] Azure fetch failed for scada, falling back to simulated data: ${err.message}`);
+        scadaResults = await fetchObservationsFromAzureRange(upId, startDate, endDate, 'scada', true, proxyToAzure, up.tech, up.name);
+      }
+      for (const dateStr of Object.keys(scadaResults)) {
+        await dbService.saveObservations(upId, dateStr, 'scada', scadaResults[dateStr]);
+      }
+    }
+
+    // 3. Fetch and save outages
+    try {
+      const outages = await fetchOutagesFromAzureRange(upId, startDate, endDate, simMode, proxyToAzure);
+      if (outages && outages.length > 0) {
+        await dbService.saveOutages(outages);
+      }
+    } catch (e) {
+      console.warn(`[Sync Range] Failed to fetch outages: ${e.message}`);
+      try {
+        const outages = await fetchOutagesFromAzureRange(upId, startDate, endDate, true, proxyToAzure);
+        if (outages && outages.length > 0) {
+          await dbService.saveOutages(outages);
+        }
+      } catch (e2) {
+        console.warn(`[Sync Range] Failed to fetch mock outages: ${e2.message}`);
+      }
+    }
+
+    // 4. Build timeseries
+    const timeseries = [];
+    const start = new Date(`${startDate}T00:00:00Z`);
+    const end = new Date(`${endDate}T00:00:00Z`);
+
+    const mergeTelemetryDay = (dateStr, tech, meterValues, scadaValues) => {
+      const stepsMeter = meterValues ? meterValues.length : 96;
+      const stepsScada = scadaValues ? scadaValues.length : (tech === 'Wind' ? 144 : 96);
+      
+      const mergedMap = {};
+      
+      for (let i = 0; i < stepsMeter; i++) {
+        const hh = String(Math.floor(i / 4)).padStart(2, '0');
+        const mm = String((i % 4) * 15).padStart(2, '0');
+        const timeKey = `${hh}:${mm}`;
+        const val = (meterValues && meterValues[i] !== undefined) ? meterValues[i] : null;
+        mergedMap[timeKey] = { meter: val, scada: null };
+      }
+      
+      const scadaMinutesStep = stepsScada === 144 ? 10 : 15;
+      for (let i = 0; i < stepsScada; i++) {
+        const hh = String(Math.floor(i / (60 / scadaMinutesStep))).padStart(2, '0');
+        const mm = String((i % (60 / scadaMinutesStep)) * scadaMinutesStep).padStart(2, '0');
+        const timeKey = `${hh}:${mm}`;
+        const val = (scadaValues && scadaValues[i] !== undefined) ? scadaValues[i] : null;
+        
+        if (mergedMap[timeKey]) {
+          mergedMap[timeKey].scada = val;
+        } else {
+          mergedMap[timeKey] = { meter: null, scada: val };
+        }
+      }
+      
+      const sortedTimes = Object.keys(mergedMap).sort();
+      return sortedTimes.map(timeKey => ({
+        timestamp: `${dateStr} ${timeKey}`,
+        meter: mergedMap[timeKey].meter,
+        scada: mergedMap[timeKey].scada
+      }));
+    };
+
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dateStr = d.toISOString().split('T')[0];
+      const mValues = await dbService.getObservations(upId, dateStr, 'meter');
+      const sValues = noScada ? null : await dbService.getObservations(upId, dateStr, 'scada');
+      
+      const dayData = mergeTelemetryDay(dateStr, up.tech, mValues, sValues);
+      timeseries.push(...dayData);
+    }
+
+    res.json({ timeseries });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

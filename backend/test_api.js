@@ -133,6 +133,16 @@ async function runTests() {
     body: JSON.stringify(auditPayload)
   });
 
+  const syncRangePayload = {
+    upId: 'UP_TEST_99',
+    startDate: '2026-07-10',
+    endDate: '2026-07-14'
+  };
+  await assertAPI('Esporta e Sincronizza Intervallo Telemetrie', '/api/registry/sync-range', {
+    method: 'POST',
+    body: JSON.stringify(syncRangePayload)
+  });
+
   // --- 3. ANOMALY CLUSTER CRUD TESTS ---
   console.log('\n--- [3] Cluster & Chat Workflow ---');
 
