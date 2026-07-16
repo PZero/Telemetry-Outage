@@ -27,7 +27,7 @@
         alert(`[Loader Error]\nImpossibile caricare lo script: ${event.target.src}\nVerificare se ci sono estensioni che lo bloccano o effettuare un hard refresh.`);
       }
     }, true);
-    window.APP_VERSION = "v106";
+    window.APP_VERSION = "v107";
     // Diagnostic: verify app boots correctly after DOM is ready
     document.addEventListener('DOMContentLoaded', function() {
       setTimeout(function() {
@@ -156,6 +156,9 @@
           <button id="nav-audit-btn" onclick="window.navigateToView ? window.navigateToView('audit') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
             <span>📋</span> <span class="sidebar-hide-on-collapse">Report Audit</span>
           </button>
+          <button id="nav-export-btn" onclick="window.navigateToView ? window.navigateToView('export') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
+            <span>📥</span> <span class="sidebar-hide-on-collapse">Esporta Dati</span>
+          </button>
           <button id="nav-ppa-btn" onclick="window.navigateToView ? window.navigateToView('ppa') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
             <span></span> <span class="sidebar-hide-on-collapse">Gestione PPA</span>
           </button>
@@ -180,7 +183,7 @@
           <span id="queue-status-desc" class="sidebar-hide-on-collapse" style="font-size: 0.58rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">Caricamento...</span>
         </div>
         <div class="sidebar-hide-on-collapse" style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 2px;">
-          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v106</span>
+          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v107</span>
         </div>
         <!-- Google User profile widget -->
         <div id="user-profile-widget" style="display: none; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); text-align: left;">
@@ -779,6 +782,76 @@
             <div style="text-align: center; color: var(--text-muted); padding: 40px;">
               Caricamento report audit in corso...
             </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- VIEW 7: EXPORT DATA PANEL -->
+      <section id="export-view" class="view-panel hidden" style="padding: 24px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; gap: 20px;">
+        <div class="view-title-bar" style="margin-bottom: 0; display: flex; justify-content: space-between; align-items: center; width: 100%; flex-shrink: 0;">
+          <div>
+            <h2 style="margin: 0; font-size: 1.4rem;">Esportazione Storica Telemetrie</h2>
+            <p style="margin: 4px 0 0 0; color: var(--text-muted); font-size: 0.75rem;">Acquisisci, persisti sul database e scarica i dati Meter e SCADA in formato CSV per un intervallo temporale.</p>
+          </div>
+        </div>
+
+        <div class="app-card" style="padding: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; display: flex; flex-direction: column; gap: 16px; flex-shrink: 0;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px;">
+            
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <label style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Unità di Produzione (UP)</label>
+              <select id="export-up-select" class="custom-select" style="width: 100%; background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); border-radius: 6px; padding: 8px; font-size: 0.8rem; outline: none; cursor: pointer;">
+                <!-- Dynamically filled -->
+              </select>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <label style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Dal Giorno</label>
+              <input type="date" id="export-start-date" class="custom-select" style="width: 100%; background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); border-radius: 6px; padding: 8px; font-size: 0.8rem; cursor: pointer; color-scheme: dark;">
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <label style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Al Giorno</label>
+              <input type="date" id="export-end-date" class="custom-select" style="width: 100%; background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); border-radius: 6px; padding: 8px; font-size: 0.8rem; cursor: pointer; color-scheme: dark;">
+            </div>
+            
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 8px;">
+            <span id="export-loading-indicator" style="display: none; align-items: center; gap: 8px; font-size: 0.75rem; color: #60a5fa;">
+              <div class="status-indicator syncing" style="width: 6px; height: 6px; background-color: #60a5fa; border-radius: 50%; box-shadow: 0 0 6px #60a5fa;"></div>
+              Acquisizione e salvataggio in corso...
+            </span>
+            <button id="export-btn" class="icon-btn" style="padding: 8px 18px; font-size: 0.8rem; font-weight: 700; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">
+              🔍 Acquisisci e Mostra Dati
+            </button>
+            <button id="export-csv-btn" class="icon-btn" style="padding: 8px 18px; font-size: 0.8rem; font-weight: 700; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; display: none;">
+              📥 Scarica CSV
+            </button>
+          </div>
+        </div>
+
+        <div class="app-card" style="flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; overflow: hidden; padding: 0;">
+          <div style="padding: 14px 20px; border-bottom: 1px solid var(--panel-border); display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; background: rgba(255,255,255,0.01);">
+            <h3 style="font-size: 0.85rem; font-weight: 700; color: var(--text-main); margin: 0;">Anteprima Dati Acquisiti</h3>
+            <span id="export-row-count" style="font-size: 0.7rem; color: var(--text-muted);">0 righe caricate</span>
+          </div>
+          
+          <div style="flex: 1; min-height: 0; overflow-y: auto;">
+            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.78rem;">
+              <thead style="position: sticky; top: 0; background: #0f172a; box-shadow: 0 1px 0 var(--panel-border); z-index: 10;">
+                <tr>
+                  <th style="padding: 10px 20px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--panel-border);">Data / Ora (Fuso Locale Roma)</th>
+                  <th style="padding: 10px 20px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--panel-border);">METER (MW)</th>
+                  <th style="padding: 10px 20px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--panel-border);">SCADA (MW)</th>
+                </tr>
+              </thead>
+              <tbody id="export-preview-tbody">
+                <tr>
+                  <td colspan="3" style="padding: 30px; text-align: center; color: var(--text-muted);">Seleziona una UP e una finestra temporale, quindi clicca su "Acquisisci e Mostra Dati"</td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </section>
