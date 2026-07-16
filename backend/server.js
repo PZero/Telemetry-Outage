@@ -64,8 +64,8 @@ Fornisce strumenti di controllo on-demand ed elaborazioni complessive.
 
 ### C. Gestione dei Cluster di Anomalie (Workflow & Chat)
 Gestisce i ticket di anomalia in corso e la chat associata per ciascun impianto.
-* **Lazy Creation del Cluster** (\`/api/agent/clusters/latest\`): Questo endpoint è il fulcro del workflow. Quando interrogato per una specifica UP e tipologia di errore, controlla se esiste già un cluster aperto (\`status = 'open'\`).
-  - **Se esiste**: lo restituisce all'istante per riprendere la gestione.
+* **Lazy Creation del Cluster** (\`/api/agent/clusters/latest\`): Questo endpoint è il fulcro del workflow. Quando interrogato per una specifica UP e tipologia di errore, controlla se esiste già un cluster aperto o sospeso (\`status IN ('open', 'suspended')\`).
+  - **Se esiste**: lo restituisce all'istante per riprendere la gestione sulla stessa chat precedente (anche se era sospeso), prevenendo la duplicazione dei ticket.
   - **Se NON esiste**: **forza automaticamente la creazione di un nuovo cluster** nel database e restituisce il record appena creato. Questo garantisce all'agente di avere sempre un cluster/ticket valido di riferimento su cui agganciare i messaggi o le estensioni.
 * **Estensione del Cluster** (\`/api/agent/clusters/{id}/extend\`): Se un'anomalia persiste nei giorni successivi, l'agente non deve aprire un nuovo ticket (che frammenterebbe la comunicazione), ma deve chiamare questo endpoint per estendere la validità del cluster corrente fino a una nuova data.
 * **Risoluzione & Chiusura** (\`/api/agent/clusters/{id}/close\`): Consente di chiudere il cluster inserendo note di risoluzione e la categoria dell'intervento.
@@ -77,10 +77,11 @@ Gestisce i ticket di anomalia in corso e la chat associata per ciascun impianto.
 
 ### Scenario A: Rilevamento e Gestione di un'Anomalia (Workflow Tipo)
 1. **Analisi/Rilevamento**: L'agente esegue \`POST /api/agent/diagnostics/test-day\` per verificare i dati del giorno precedente di un impianto.
-2. **Ingaggio**: Se il test rileva disallineamenti significativi (es. mancano dati SCADA), l'agente interroga \`GET /api/agent/clusters/latest?upId=UP_WIND_01&type=scada\`. L'endpoint recupera il cluster esistente o, se è il primo giorno in cui si presenta il problema, **crea automaticamente** un nuovo cluster aperto (es. \`id = 12\`).
+2. **Ingaggio**: Se il test rileva disallineamenti significativi (es. mancano dati SCADA), l'agente interroga \`GET /api/agent/clusters/latest?upId=UP_WIND_01&type=scada\`. L'endpoint recupera il cluster esistente (anche se in stato sospeso) o, se è il primo giorno, crea automaticamente un nuovo cluster (es. \`id = 12\`).
 3. **Avviso Chat**: L'agente scrive sulla chat dell'anomalia (\`POST /api/agent/clusters/12/messages\`) notificando i process owner del problema rilevato.
-4. **Persistenza (Giorno 2)**: Il giorno dopo, l'agente rileva che il problema persiste. Esegue \`POST /api/agent/clusters/12/extend\` per allungare il cluster a oggi, e invia un nuovo messaggio di sollecito in chat.
-5. **Risoluzione**: Una volta che i tecnici correggono l'allineamento o riparano il sensore, l'agente invia \`POST /api/agent/clusters/12/close\` con la risoluzione, chiudendo ufficialmente la pratica.
+4. **Sospensione**: Se i tecnici informano che saranno necessari ad esempio 10 giorni per la risoluzione, l'agente esegue \`POST /api/agent/clusters/12/suspend\` inviando la data di riattivazione.
+5. **Re-ingaggio (Giorno 10)**: Trascorsi i 10 giorni, l'agente interroga nuovamente lo stesso cluster \`id = 12\`, esegue \`POST /api/agent/clusters/12/reactivate\` per riaprirlo, e riprende a scrivere nella stessa chat precedente.
+6. **Risoluzione**: Una volta che i tecnici risolvono il problema, l'agente invia \`POST /api/agent/clusters/12/close\` chiudendo ufficialmente la pratica.
 
 ### Scenario B: Manutenzione e Configurazione Impianto
 1. **Creazione UP**: L'amministratore/agente aggiunge un nuovo impianto con \`POST /api/agent/registry/ups\`.
@@ -1016,6 +1017,101 @@ app.post('/api/agent/clusters/:id/close', requireGoogleAuth, async (req, res) =>
     const { id } = req.params;
     const { resolutionCategory, resolutionNotes } = req.body;
     await dbService.closeCluster(id, resolutionCategory, resolutionNotes);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters/{id}/suspend:
+ *   post:
+ *     summary: Sospende temporaneamente un cluster di anomalie
+ *     description: Segna lo stato del cluster come 'suspended', imposta una data di riattivazione futura ed inserisce una notifica di sistema nella chat.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - reactivationDate
+ *             properties:
+ *               reactivationDate:
+ *                 type: string
+ *                 description: Data in cui il cluster deve essere riattivato (YYYY-MM-DD).
+ *               notes:
+ *                 type: string
+ *                 description: Motivazione della sospensione temporanea.
+ *     responses:
+ *       200:
+ *         description: Sospensione registrata con successo.
+ */
+app.post('/api/agent/clusters/:id/suspend', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reactivationDate, notes } = req.body;
+    if (!reactivationDate) {
+      return res.status(400).json({ error: 'Missing required body field reactivationDate.' });
+    }
+    await dbService.suspendCluster(id, reactivationDate);
+    
+    // Add system notification message
+    const sender = 'System Agent';
+    const messageText = `⚠️ Case sospeso temporaneamente fino al ${reactivationDate}. Motivo: ${notes || 'Nessun dettaglio fornito'}.`;
+    await dbService.addClusterMessage(id, sender, messageText);
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
+ * /api/agent/clusters/{id}/reactivate:
+ *   post:
+ *     summary: Riattiva un cluster precedentemente sospeso
+ *     description: Segna lo stato del cluster come 'open', rimuove la data di riattivazione ed inserisce una notifica di sistema nella chat.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               notes:
+ *                 type: string
+ *                 description: Note aggiuntive sulla riattivazione.
+ *     responses:
+ *       200:
+ *         description: Riattivazione completata con successo.
+ */
+app.post('/api/agent/clusters/:id/reactivate', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { notes } = req.body;
+    await dbService.reactivateCluster(id);
+    
+    // Add system notification message
+    const sender = 'System Agent';
+    const messageText = `🔄 Case riattivato. Stato impostato nuovamente in lavorazione (Open). ${notes ? 'Note: ' + notes : ''}`;
+    await dbService.addClusterMessage(id, sender, messageText);
+    
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -163,10 +163,18 @@ async function initializeTables() {
         start_date TEXT NOT NULL,
         end_date TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'open',
+        reactivation_date TEXT,
         created_at TEXT,
         updated_at TEXT
       )
     `);
+
+    // Add reactivation_date column to clusters table if it doesn't exist (migration for existing database)
+    try {
+      await dbRun(`ALTER TABLE clusters ADD COLUMN IF NOT EXISTS reactivation_date TEXT`);
+    } catch (e) {
+      console.log('[PG Migration] "reactivation_date" column already exists or failed to add:', e.message);
+    }
 
     // 7. Cluster Messages Table
     await dbRun(`
@@ -515,10 +523,28 @@ export const dbService = {
 
   async getLatestOpenCluster(upId, type) {
     const row = await dbGet(
-      "SELECT * FROM clusters WHERE up_id = $1 AND type = $2 AND status = 'open' ORDER BY start_date DESC, created_at DESC LIMIT 1",
+      "SELECT * FROM clusters WHERE up_id = $1 AND type = $2 AND status IN ('open', 'suspended') ORDER BY start_date DESC, created_at DESC LIMIT 1",
       [upId, type]
     );
     return row || null;
+  },
+
+  async suspendCluster(clusterId, reactivationDate) {
+    const now = new Date().toISOString();
+    await dbRun(
+      "UPDATE clusters SET status = 'suspended', reactivation_date = $1, updated_at = $2 WHERE id = $3",
+      [reactivationDate, now, clusterId]
+    );
+    return true;
+  },
+
+  async reactivateCluster(clusterId) {
+    const now = new Date().toISOString();
+    await dbRun(
+      "UPDATE clusters SET status = 'open', reactivation_date = NULL, updated_at = $1 WHERE id = $2",
+      [now, clusterId]
+    );
+    return true;
   },
 
   async getAllUPs() {

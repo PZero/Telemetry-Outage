@@ -179,6 +179,25 @@ async function runTests() {
       body: JSON.stringify(extendPayload)
     });
 
+    // Suspend cluster
+    const suspendPayload = {
+      reactivationDate: '2026-07-25',
+      notes: 'Sospensione di test per 10 giorni'
+    };
+    await assertAPI('Sospendi cluster temporaneamente', `/api/agent/clusters/${clusterId}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify(suspendPayload)
+    });
+
+    // Reactivate cluster
+    const reactivatePayload = {
+      notes: 'Test di riattivazione'
+    };
+    await assertAPI('Riattiva cluster sospeso', `/api/agent/clusters/${clusterId}/reactivate`, {
+      method: 'POST',
+      body: JSON.stringify(reactivatePayload)
+    });
+
     // Close cluster
     const closePayload = {
       resolutionCategory: 'Verifica completata',
