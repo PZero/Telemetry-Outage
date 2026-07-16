@@ -198,6 +198,29 @@ async function runTests() {
       body: JSON.stringify(reactivatePayload)
     });
 
+    // Suspend cluster with expired date
+    const suspendExpiredPayload = {
+      reactivationDate: '2026-07-01',
+      notes: 'Sospensione scaduta'
+    };
+    await assertAPI('Sospendi cluster con data scaduta', `/api/agent/clusters/${clusterId}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify(suspendExpiredPayload)
+    });
+
+    // Fetch latest cluster to trigger auto-reactivation
+    const response = await fetch(`${BASE_URL}/api/agent/clusters/latest?upId=UP_TEST_99&type=both`, {
+      headers: { 'Authorization': 'Bearer mock-google-token-id' }
+    });
+    const latestCluster = await response.json();
+    console.log('latestCluster returned to test:', latestCluster);
+    if (latestCluster.status === 'open' && latestCluster.force_chat_update === 1) {
+      console.log('[PASS] Auto-riattivazione cluster e flag force_chat_update impostato.');
+    } else {
+      console.error(`[FAIL] Auto-riattivazione fallita. Got status: ${latestCluster.status}, force_chat_update: ${latestCluster.force_chat_update}`);
+      process.exit(1);
+    }
+
     // Close cluster
     const closePayload = {
       resolutionCategory: 'Verifica completata',

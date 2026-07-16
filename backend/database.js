@@ -164,6 +164,7 @@ async function initializeTables() {
         end_date TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'open',
         reactivation_date TEXT,
+        force_chat_update INTEGER DEFAULT 0,
         created_at TEXT,
         updated_at TEXT
       )
@@ -174,6 +175,13 @@ async function initializeTables() {
       await dbRun(`ALTER TABLE clusters ADD COLUMN IF NOT EXISTS reactivation_date TEXT`);
     } catch (e) {
       console.log('[PG Migration] "reactivation_date" column already exists or failed to add:', e.message);
+    }
+
+    // Add force_chat_update column to clusters table if it doesn't exist
+    try {
+      await dbRun(`ALTER TABLE clusters ADD COLUMN IF NOT EXISTS force_chat_update INTEGER DEFAULT 0`);
+    } catch (e) {
+      console.log('[PG Migration] "force_chat_update" column already exists or failed to add:', e.message);
     }
 
     // 7. Cluster Messages Table
@@ -437,8 +445,31 @@ export const dbService = {
     };
   },
 
+  async checkAndReactivateSuspendedClusters() {
+    const getItalyTodayStr = () => {
+      return new Date().toLocaleString('sv', { timeZone: 'Europe/Rome' }).split(' ')[0];
+    };
+    const today = getItalyTodayStr();
+    const rows = await dbAll(
+      "SELECT id FROM clusters WHERE status = 'suspended' AND reactivation_date IS NOT NULL AND reactivation_date <= $1",
+      [today]
+    );
+    for (const row of rows) {
+      const now = new Date().toISOString();
+      await dbRun(
+        "UPDATE clusters SET status = 'open', force_chat_update = 1, reactivation_date = NULL, updated_at = $1 WHERE id = $2",
+        [now, row.id]
+      );
+      await dbRun(
+        "INSERT INTO cluster_messages (cluster_id, sender, message_text, created_at) VALUES ($1, $2, $3, $4)",
+        [row.id, 'System Agent', 'Il periodo di sospensione e terminato. Il ticket e stato riattivato in lavorazione. Richiesto aggiornamento via chat.', now]
+      );
+    }
+  },
+
   // --- CLUSTERS & MESSAGES METHODS ---
   async getClusters(status, upId, type) {
+    await this.checkAndReactivateSuspendedClusters();
     let sql = 'SELECT * FROM clusters WHERE 1=1';
     const params = [];
     let paramIdx = 1;
@@ -511,6 +542,11 @@ export const dbService = {
       'INSERT INTO cluster_messages (cluster_id, sender, message_text, created_at) VALUES ($1, $2, $3, $4)',
       [clusterId, sender, messageText, now]
     );
+    // Clear force_chat_update bit when chat is updated
+    await dbRun(
+      'UPDATE clusters SET force_chat_update = 0 WHERE id = $1',
+      [clusterId]
+    );
     return true;
   },
 
@@ -522,6 +558,7 @@ export const dbService = {
   },
 
   async getLatestOpenCluster(upId, type) {
+    await this.checkAndReactivateSuspendedClusters();
     const row = await dbGet(
       "SELECT * FROM clusters WHERE up_id = $1 AND type = $2 AND status IN ('open', 'suspended') ORDER BY start_date DESC, created_at DESC LIMIT 1",
       [upId, type]

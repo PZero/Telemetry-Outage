@@ -86,7 +86,18 @@ Gestisce i ticket di anomalia in corso e la chat associata per ciascun impianto.
 ### Scenario B: Manutenzione e Configurazione Impianto
 1. **Creazione UP**: L'amministratore/agente aggiunge un nuovo impianto con \`POST /api/agent/registry/ups\`.
 2. **Configurazione Partner**: Crea una controparte commerciale con \`POST /api/agent/registry/ppa-partners\`.
-3. **Associazione**: Associa l'impianto al partner PPA con \`POST /api/agent/registry/assign\`.`,
+3. **Associazione**: Associa l'impianto al partner PPA con \`POST /api/agent/registry/assign\`.
+
+### Scenario C: Ciclo di Vita dell'Anomalia (Ciclo Completo Agente)
+1. **Elenco Impianti**: L'agente recupera la flotta delle UP interrogando l'API \`GET /api/registry\`.
+2. **Controllo Anomalie**: Per ogni UP della flotta, l'agente interroga l'anomalia aperta o sospesa chiamando l'API \`GET /api/agent/clusters/latest?upId=[upId]&type=scada\` (o type=meter).
+3. **Apertura Chat / Primo Invio**: L'endpoint lazy restituisce il cluster (es. \`id = 45\`). L'agente scrive il primo avviso per i tecnici tramite \`POST /api/agent/clusters/45/messages\`.
+4. **Verifica su Indicazione Utente**: In chat un utente risponde che il problema e risolto e chiede di verificare. L'agente riesegue l'analisi di integrità per l'impianto in quel giorno tramite \`POST /api/agent/diagnostics/test-day\`.
+5. **Esito Negativo & Nuovo Allineamento**: Il test rileva che l'errore persiste. I tecnici in chat spiegano che il pezzo di ricambio arrivera tra una settimana.
+6. **Sospensione Temporanea**: L'agente sospende il ticket chiamando \`POST /api/agent/clusters/45/suspend\`, passando la data di wakeup \`reactivationDate\` (oggi + 7 giorni). Lo stato del cluster passa a 'suspended'.
+7. **Wakeup Automatico (Giorno +7)**: Trascorsi i 7 giorni, quando l'agente esegue il consueto controllo quotidiano tramite \`GET /api/agent/clusters/latest\`, il server rileva che la data di wakeup e trascorsa, riattiva il cluster in stato 'open', e imposta il flag \`force_chat_update = 1\` (true) nella risposta JSON.
+8. **Re-ingaggio & Ripetizione Test**: L'agente vede il flag \`force_chat_update\` attivo, scrive in chat chiedendo notizie e i tecnici danno l'ok per verificare nuovamente. L'agente chiama \`POST /api/agent/diagnostics/test-day\` e l'esito e positivo (nessuna anomalia).
+9. **Risoluzione Finale**: L'agente chiude definitivamente l'anomalia chiamando \`POST /api/agent/clusters/45/close\`.`,
     },
     servers: [
       {
@@ -578,7 +589,14 @@ app.get('/api/sync/status', requireGoogleAuth, (req, res) => {
 });
 
 /**
- * Registry (UP Fleet) Endpoints
+ * @openapi
+ * /api/registry:
+ *   get:
+ *     summary: Ottiene l'elenco di tutte le Unita di Produzione (UP)
+ *     description: Ritorna la lista completa di tutte le UP della flotta con i relativi attributi (tecnologia, capacita, flag disabilitazione scada, spegnimento notturno, ecc.).
+ *     responses:
+ *       200:
+ *         description: Elenco delle UP caricato con successo.
  */
 app.get('/api/registry', async (req, res) => {
   try {
