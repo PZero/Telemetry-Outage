@@ -1383,19 +1383,20 @@ function setupSettingsHandlers() {
   }
 
   const stopSyncBtn = document.getElementById("stop-sync-btn");
-  if (stopSyncBtn) {
-    stopSyncBtn.onclick = async () => {
-      try {
-        const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
-        await fetch(`${apiUrl}/api/sync/cancel`, {
-          method: "POST",
-          headers: getAuthHeaders()
-        });
-      } catch (e) {
-        console.warn("[Cancel Sync] Failed:", e);
-      }
-    };
-  }
+  const handleCancelSync = async () => {
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      await fetch(`${apiUrl}/api/sync/cancel`, {
+        method: "POST",
+        headers: getAuthHeaders()
+      });
+    } catch (e) {
+      console.warn("[Cancel Sync] Failed:", e);
+    }
+  };
+  if (stopSyncBtn) stopSyncBtn.onclick = handleCancelSync;
+  const globalStopBtn = document.getElementById("global-stop-sync-btn");
+  if (globalStopBtn) globalStopBtn.onclick = handleCancelSync;
 
   const clearLogsBtn = document.getElementById("clear-logs-btn");
   if (clearLogsBtn) {
@@ -1841,6 +1842,7 @@ function startSyncStatusPoller() {
       state.isSyncRunning = data.isSyncRunning;
       state.totalTasks = data.totalTasks;
       state.completedTasks = data.completedTasks;
+      state.latestLog = data.latestLog || (data.logs && data.logs.length > 0 ? data.logs[data.logs.length - 1] : "");
       
       // Update active sync tasks for cell rendering
       state.activeSyncTasks = data.activeSyncTasks || {};
@@ -1913,24 +1915,43 @@ function updateSyncUI() {
   const barText = document.getElementById("sync-progress-text");
   const stopSyncBtn = document.getElementById("stop-sync-btn");
 
+  // Global Top Sync Banner Elements
+  const globalBanner = document.getElementById("global-sync-banner");
+  const globalTitle = document.getElementById("global-sync-title");
+  const globalSubtitle = document.getElementById("global-sync-subtitle");
+  const globalFill = document.getElementById("global-sync-progress-fill");
+  const globalPercent = document.getElementById("global-sync-percent");
+
   if (state.isSyncRunning) {
-    badge.className = "status-indicator syncing";
+    if (badge) badge.className = "status-indicator syncing";
     const percent = state.totalTasks > 0 ? Math.round((state.completedTasks / state.totalTasks) * 100) : 0;
-    textLabel.innerText = `Sync in corso (${percent}%)`;
+    if (textLabel) textLabel.innerText = `Sync in corso (${percent}%)`;
     if (stopSyncBtn) stopSyncBtn.style.display = "inline-flex";
     
     if (barFill && barText) {
       barFill.style.width = `${percent}%`;
-      barText.innerText = `${state.completedTasks} di ${state.totalTasks} richieste completate (${percent}%)`;
+      barText.innerText = `${state.completedTasks} di ${state.totalTasks} blocchi completati (${percent}%)`;
+    }
+
+    if (globalBanner) {
+      globalBanner.style.display = "block";
+      if (globalTitle) globalTitle.innerText = `Sincronizzazione in corso (${state.completedTasks}/${state.totalTasks} blocchi)`;
+      if (globalSubtitle) globalSubtitle.innerText = state.latestLog || "Elaborazione dati in background...";
+      if (globalFill) globalFill.style.width = `${percent}%`;
+      if (globalPercent) globalPercent.innerText = `${percent}%`;
     }
   } else {
-    badge.className = "status-indicator online";
-    textLabel.innerText = "Sync in Background Attivo";
+    if (badge) badge.className = "status-indicator online";
+    if (textLabel) textLabel.innerText = "Sync in Background Attivo";
     if (stopSyncBtn) stopSyncBtn.style.display = "none";
     
     if (barFill && barText) {
       barFill.style.width = "0%";
       barText.innerText = "Nessuna sincronizzazione in corso";
+    }
+
+    if (globalBanner) {
+      globalBanner.style.display = "none";
     }
   }
 }

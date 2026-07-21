@@ -20,12 +20,14 @@ function addLog(message) {
 }
 
 export function getSyncStatus() {
+  const latestLog = logs.length > 0 ? logs[logs.length - 1] : "";
   return {
     isSyncRunning,
     totalTasks,
     completedTasks,
     activeSyncTasks,
-    logs
+    logs,
+    latestLog
   };
 }
 
@@ -179,31 +181,32 @@ export async function startSync(params, proxyToAzure) {
 
       for (const dateStr of syncDates) {
         if (isSelective) {
-          if (noScada) {
-            const meterObs = await dbService.getObservations(up.id, dateStr, 'meter');
-            const meterComplete = meterObs && !meterObs.includes(null);
-            if (!meterComplete) {
-              meterDates.push(dateStr);
-            }
-          } else {
-            const status = await classifyDayIntegrity(up, dateStr);
-            if (status !== 'green' && status !== 'grey') {
-              const meterObs = await dbService.getObservations(up.id, dateStr, 'meter');
-              const meterHasNulls = !meterObs || meterObs.includes(null);
-              if (meterHasNulls) {
-                meterDates.push(dateStr);
-              }
+          const meterRec = await dbService.getObservationsRecord(up.id, dateStr, 'meter');
+          const scadaRec = await dbService.getObservationsRecord(up.id, dateStr, 'scada');
 
-              const scadaObs = await dbService.getObservations(up.id, dateStr, 'scada');
-              const scadaHasNulls = !scadaObs || scadaObs.includes(null);
-              if (scadaHasNulls) {
-                scadaDates.push(dateStr);
-              }
+          const meterIsSim = meterRec && meterRec.isSimulated;
+          const scadaIsSim = scadaRec && scadaRec.isSimulated;
+
+          // If current sync is REAL (!simMode) and DB contains SIMULATED data, force recovery
+          const meterNeedRecovery = !meterRec || meterRec.values.includes(null) || (!simMode && meterIsSim);
+          const scadaNeedRecovery = !noScada && (!scadaRec || scadaRec.values.includes(null) || (!simMode && scadaIsSim));
+
+          if (meterNeedRecovery) {
+            meterDates.push(dateStr);
+            if (!simMode && meterIsSim) {
+              addLog(`[${up.name || up.id}] Data ${dateStr}: trovati dati METER simulati in modalità reale -> Re-invio a coda per sovrascrittura con dati Azure.`);
+            }
+          }
+
+          if (scadaNeedRecovery) {
+            scadaDates.push(dateStr);
+            if (!simMode && scadaIsSim) {
+              addLog(`[${up.name || up.id}] Data ${dateStr}: trovati dati SCADA simulati in modalità reale -> Re-invio a coda per sovrascrittura con dati Azure.`);
             }
           }
 
           const status = await classifyDayIntegrity(up, dateStr);
-          if (status !== 'green' && status !== 'grey') {
+          if (status !== 'green' && status !== 'grey' || (!simMode && (meterIsSim || scadaIsSim))) {
             outagesDates.push(dateStr);
           }
         } else {
@@ -235,20 +238,20 @@ export async function startSync(params, proxyToAzure) {
     }
 
     if (tasks.length === 0) {
-      addLog("Tutti i dati sono già completi nel database. Fine.");
+      addLog("✅ Tutti i dati nell'intervallo richiesto sono già presenti e completi nel database. Nessun buco rilevato.");
       isSyncRunning = false;
       return;
     }
 
     syncQueue = tasks;
     totalTasks = tasks.length;
-    addLog(`Generati ${tasks.length} blocchi di sincronizzazione. Avvio loop in background...`);
+    addLog(`🚀 Pianificati ${tasks.length} blocchi di acquisizione per ${targetUPs.length} impianti. Avvio del worker in background...`);
 
     // Run in background without awaiting
     runBackgroundLoop(proxyToAzure);
 
   } catch (err) {
-    addLog(`ERRORE critico durante la generazione della coda: ${err.message}`);
+    addLog(`❌ ERRORE critico durante la generazione della coda: ${err.message}`);
     isSyncRunning = false;
   }
 }
@@ -266,7 +269,7 @@ async function runBackgroundLoop(proxyToAzure) {
     const endDate = sortedDates[sortedDates.length - 1];
     const datesInfo = task.dates.length === 1 ? task.dates[0] : `${startDate} al ${endDate} (${task.dates.length} gg)`;
 
-    addLog(`Richiesta inviata: ${task.type.toUpperCase()} (${task.upName || task.upId}, Periodo: ${datesInfo})`);
+    addLog(`📡 [${task.upName || task.upId}] Avvio recupero ${task.type.toUpperCase()} (Periodo: ${datesInfo}${task.simulated ? ' - Modalità Simulazione' : ' - Azure API Reale'})`);
 
     try {
       if (task.type === 'meter' || task.type === 'scada') {
@@ -274,27 +277,29 @@ async function runBackgroundLoop(proxyToAzure) {
           const steps = (task.upTech === 'Wind') ? 144 : 96;
           const values = Array(steps).fill(null);
           for (const d of task.dates) {
-            await dbService.saveObservations(task.upId, d, task.type, values);
+            await dbService.saveObservations(task.upId, d, task.type, values, task.simulated);
           }
-          addLog(`Completato: SCADA (${task.upName || task.upId}, Periodo: ${datesInfo}) -> OK. Marcata come NO-SCADA.`);
+          addLog(`✅ [${task.upName || task.upId}] SCADA disabilitato: completato inserimento segnaposto (Periodo: ${datesInfo}).`);
         } else {
           const valuesMap = await fetchObservationsFromAzureRange(task.upId, startDate, endDate, task.type, task.simulated, proxyToAzure, task.upTech, task.upName);
           for (const d of task.dates) {
             const values = valuesMap[d] || Array((task.upTech === 'Wind' && task.type === 'scada') ? 144 : 96).fill(null);
-            await dbService.saveObservations(task.upId, d, task.type, values);
+            await dbService.saveObservations(task.upId, d, task.type, values, task.simulated);
           }
-          addLog(`Completato: ${task.type.toUpperCase()} (${task.upName || task.upId}, Periodo: ${datesInfo}) -> OK.`);
+          addLog(`✅ [${task.upName || task.upId}] Ricevuti e salvati dati ${task.type.toUpperCase()} su DB per ${datesInfo}.`);
         }
       } else if (task.type === 'outages') {
         const outages = await fetchOutagesFromAzureRange(task.upId, startDate, endDate, task.simulated, proxyToAzure);
         await dbService.saveOutages(outages);
-        addLog(`Completato: OUTAGES (${task.upName || task.upId}, Periodo: ${datesInfo}) -> OK.`);
+        addLog(`✅ [${task.upName || task.upId}] Aggiornati disservizi OUTAGES per ${datesInfo}.`);
       }
     } catch (err) {
-      addLog(`ERRORE su ${task.type.toUpperCase()} (${task.upName || task.upId}, Periodo: ${datesInfo}): ${err.message || String(err)}`);
+      addLog(`❌ [${task.upName || task.upId}] Errore recupero ${task.type.toUpperCase()} per ${datesInfo}: ${err.message || String(err)}`);
     }
 
     completedTasks++;
+    const percent = Math.round((completedTasks / totalTasks) * 100);
+    addLog(`📊 Avanzamento globale: ${percent}% (${completedTasks}/${totalTasks} blocchi completati)`);
     
     task.dates.forEach(d => {
       delete activeSyncTasks[`${task.upId}|${d}`];

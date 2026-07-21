@@ -179,6 +179,12 @@ async function runTests() {
       body: JSON.stringify(extendPayload)
     });
 
+    // Test updating external_chat_id context
+    await assertAPI('Associa chat context Teams al cluster', `/api/agent/clusters/${clusterId}/chat-context`, {
+      method: 'POST',
+      body: JSON.stringify({ external_chat_id: '19:teams_thread_12345@thread.v2', chat_platform: 'teams' })
+    });
+
     // Suspend cluster
     const suspendPayload = {
       reactivationDate: '2026-07-25',

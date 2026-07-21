@@ -88,21 +88,25 @@ Gestisce i ticket di anomalia in corso e la chat associata per ciascun impianto.
 2. **Configurazione Partner**: Crea una controparte commerciale con \`POST /api/agent/registry/ppa-partners\`.
 3. **Associazione**: Associa l'impianto al partner PPA con \`POST /api/agent/registry/assign\`.
 
-### Scenario C: Ciclo di Vita dell'Anomalia (Ciclo Completo Agente)
+### Scenario C: Ciclo di Vita dell'Anomalia (Ciclo Completo Agente con Chat Teams/Slack)
 1. **Elenco Impianti**: L'agente recupera la flotta delle UP interrogando l'API \`GET /api/registry\`.
 2. **Controllo Anomalie**: Per ogni UP della flotta, l'agente interroga l'anomalia aperta o sospesa chiamando l'API \`GET /api/agent/clusters/latest?upId=[upId]&type=scada\` (o type=meter).
-3. **Apertura Chat / Primo Invio**: L'endpoint lazy restituisce il cluster (es. \`id = 45\`). L'agente scrive il primo avviso per i tecnici tramite \`POST /api/agent/clusters/45/messages\`.
-4. **Verifica su Indicazione Utente**: In chat un utente risponde che il problema e risolto e chiede di verificare. L'agente riesegue l'analisi di integrità per l'impianto in quel giorno tramite \`POST /api/agent/diagnostics/test-day\`.
-5. **Esito Negativo & Nuovo Allineamento**: Il test rileva che l'errore persiste. I tecnici in chat spiegano che il pezzo di ricambio arrivera tra una settimana.
-6. **Sospensione Temporanea**: L'agente sospende il ticket chiamando \`POST /api/agent/clusters/45/suspend\`, passando la data di wakeup \`reactivationDate\` (oggi + 7 giorni). Lo stato del cluster passa a 'suspended'.
-7. **Wakeup Automatico (Giorno +7)**: Trascorsi i 7 giorni, quando l'agente esegue il consueto controllo quotidiano tramite \`GET /api/agent/clusters/latest\`, il server rileva che la data di wakeup e trascorsa, riattiva il cluster in stato 'open', e imposta il flag \`force_chat_update = 1\` (true) nella risposta JSON.
-8. **Re-ingaggio & Ripetizione Test**: L'agente vede il flag \`force_chat_update\` attivo, scrive in chat chiedendo notizie e i tecnici danno l'ok per verificare nuovamente. L'agente chiama \`POST /api/agent/diagnostics/test-day\` e l'esito e positivo (nessuna anomalia).
-9. **Risoluzione Finale**: L'agente chiude definitivamente l'anomalia chiamando \`POST /api/agent/clusters/45/close\`.`,
+3. **Apertura Chat & Tracciamento Context**: L'endpoint lazy restituisce il cluster (es. \`id = 45\`). L'agente associa l'ID univoco del thread di Teams (es. \`external_chat_id = "19:meeting_ABC...@thread.v2"\`) tramite i parametri query o invocando \`POST /api/agent/clusters/45/chat-context\`. L'agente scrive il primo messaggio via \`POST /api/agent/clusters/45/messages\`.
+4. **Verifica su Indicazione Utente**: In chat Teams un utente risponde che il problema e risolto e chiede di verificare. L'agente riesegue il test di integrita via \`POST /api/agent/diagnostics/test-day\`.
+5. **Esito Negativo & Allineamento Sospensione**: Il test rileva che l'errore persiste. I tecnici spiegano che ci vorranno 7 giorni per il ricambio.
+6. **Sospensione Temporanea**: L'agente sospende il ticket chiamando \`POST /api/agent/clusters/45/suspend\`, passando la data di wakeup \`reactivationDate\` (oggi + 7 giorni). Lo stato passa a 'suspended', conservando a DB l'ID della chat Teams (\`external_chat_id\`).
+7. **Wakeup Automatico (Giorno +7)**: Trascorsi i 7 giorni, alla prima interrogazione l'anomalia si riattiva in stato 'open', con \`force_chat_update = 1\` e restituendo l'ID originale \`external_chat_id\`.
+8. **Re-ingaggio nella Chat Esistente**: L'agente legge \`external_chat_id\` e scrive direttamente nel thread Teams d'origine ("I 7 giorni sono trascorsi, rieseguo la verifica..."). Dopo l'esito positivo del test, chiude l'anomalia.
+9. **Risoluzione Finale**: L'agente chiude definitivamente il ticket chiamando \`POST /api/agent/clusters/45/close\`.`,
     },
     servers: [
       {
-        url: '/',
-        description: 'Host Corrente (Autodetect)'
+        url: process.env.PUBLIC_API_URL || 'https://telemetry-outage.onrender.com',
+        description: 'Server Produzione (Render)'
+      },
+      {
+        url: 'http://localhost:3000',
+        description: 'Server Sviluppo Locale'
       }
     ],
     components: {
@@ -125,11 +129,93 @@ Gestisce i ticket di anomalia in corso e la chat associata per ciascun impianto.
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
+function getPureSwagger2Spec() {
+  const openapi = swaggerJsdoc(swaggerOptions);
+  const swagger2 = {
+    swagger: '2.0',
+    info: openapi.info,
+    host: process.env.PUBLIC_HOST || 'telemetry-outage.onrender.com',
+    basePath: '/',
+    schemes: ['https', 'http'],
+    securityDefinitions: {
+      api_key: {
+        type: 'apiKey',
+        name: 'Authorization',
+        in: 'header'
+      }
+    },
+    security: [{ api_key: [] }],
+    paths: {}
+  };
+  for (const [pathKey, pathObj] of Object.entries(openapi.paths)) {
+    swagger2.paths[pathKey] = {};
+    for (const [method, op] of Object.entries(pathObj)) {
+      const op2 = {
+        summary: op.summary,
+        description: op.description,
+        operationId: op.operationId,
+        parameters: [],
+        responses: {}
+      };
+      if (op.parameters) {
+        for (const p of op.parameters) {
+          const p2 = { in: p.in, name: p.name, description: p.description, required: p.required || false };
+          if (p.schema && p.schema.type) {
+            p2.type = p.schema.type;
+            if (p.schema.enum) p2.enum = p.schema.enum;
+            if (p.schema.default) p2.default = p.schema.default;
+          } else if (p.type) {
+            p2.type = p.type;
+          }
+          op2.parameters.push(p2);
+        }
+      }
+      if (op.requestBody && op.requestBody.content && op.requestBody.content['application/json']) {
+        op2.parameters.push({
+          in: 'body',
+          name: 'body',
+          required: op.requestBody.required || false,
+          schema: op.requestBody.content['application/json'].schema
+        });
+      }
+      if (op.responses) {
+        for (const [code, resObj] of Object.entries(op.responses)) {
+          const res2 = { description: resObj.description };
+          if (resObj.content && resObj.content['application/json']) {
+            res2.schema = resObj.content['application/json'].schema;
+          }
+          op2.responses[code] = res2;
+        }
+      }
+      swagger2.paths[pathKey][method] = op2;
+    }
+  }
+  return swagger2;
+}
+
+// Endpoint Swagger 2.0 (Pura ed al 100% compatibile con Copilot Studio & Power Platform)
+app.get('/swagger.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(getPureSwagger2Spec());
+});
+
+// Endpoint per Copilot Studio (Restituisce la specifica pura Swagger 2.0)
+app.get('/openapi.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(getPureSwagger2Spec());
+});
+
 app.get('/api-docs/openapi.json', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
-  res.send(swaggerDocs);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(getPureSwagger2Spec());
 });
+
+// UI Swagger
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
 // Token cache state
 let cachedToken = null;
@@ -592,11 +678,35 @@ app.get('/api/sync/status', requireGoogleAuth, (req, res) => {
  * @openapi
  * /api/registry:
  *   get:
+ *     operationId: getRegistry
  *     summary: Ottiene l'elenco di tutte le Unita di Produzione (UP)
  *     description: Ritorna la lista completa di tutte le UP della flotta con i relativi attributi (tecnologia, capacita, flag disabilitazione scada, spegnimento notturno, ecc.).
  *     responses:
  *       200:
  *         description: Elenco delle UP caricato con successo.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: string
+ *                   name:
+ *                     type: string
+ *                   tech:
+ *                     type: string
+ *                   region:
+ *                     type: string
+ *                   capacity:
+ *                     type: number
+ *                   ppa_partner:
+ *                     type: string
+ *                   scada_disabled:
+ *                     type: boolean
+ *                   solar_shutdown:
+ *                     type: boolean
  */
 app.get('/api/registry', async (req, res) => {
   try {
@@ -870,6 +980,7 @@ app.post('/api/users/decline', requireAdmin, async (req, res) => {
  * @openapi
  * /api/agent/clusters:
  *   get:
+ *     operationId: getClusters
  *     summary: Ottiene l'elenco dei cluster di anomalie
  *     description: Ritorna una lista di cluster filtrata per stato, UP o tipo di anomalia.
  *     parameters:
@@ -908,6 +1019,7 @@ app.get('/api/agent/clusters', requireGoogleAuth, async (req, res) => {
  * @openapi
  * /api/agent/clusters/latest:
  *   get:
+ *     operationId: getLatestCluster
  *     summary: Recupera o crea il cluster di anomalie più recente
  *     description: Ritorna il cluster aperto più recente per un impianto e tipo. Se non esiste, crea automaticamente un nuovo cluster aperto per attivare il flusso di chat con i process owner.
  *     parameters:
@@ -934,20 +1046,34 @@ app.get('/api/agent/clusters', requireGoogleAuth, async (req, res) => {
  *         schema:
  *           type: string
  *         description: Messaggio di sistema iniziale se viene creato un nuovo cluster.
+ *       - in: query
+ *         name: external_chat_id
+ *         schema:
+ *           type: string
+ *         description: ID della chat/thread di Teams o altra piattaforma (es. 19:meeting_... o thread.v2).
+ *       - in: query
+ *         name: chat_platform
+ *         schema:
+ *           type: string
+ *           default: teams
+ *         description: Nome della piattaforma (es. teams, slack, custom).
  *     responses:
  *       200:
- *         description: Cluster esistente o appena creato.
+ *         description: Cluster esistente o appena creato con riferimenti chat.
  */
 app.get('/api/agent/clusters/latest', requireGoogleAuth, async (req, res) => {
   try {
-    const { upId, type, startDate, notes } = req.query;
+    const { upId, type, startDate, notes, external_chat_id, chat_platform } = req.query;
     if (!upId || !type) {
       return res.status(400).json({ error: 'Missing required parameters upId or type.' });
     }
     let cluster = await dbService.getLatestOpenCluster(upId, type);
     if (!cluster) {
       const startD = startDate || new Date().toISOString().split('T')[0];
-      cluster = await dbService.createCluster(upId, type, startD, startD, notes || `Cluster avviato per anomalia ${type}.`);
+      cluster = await dbService.createCluster(upId, type, startD, startD, notes || `Cluster avviato per anomalia ${type}.`, external_chat_id, chat_platform);
+    } else if (external_chat_id && cluster.external_chat_id !== external_chat_id) {
+      await dbService.updateClusterChatContext(cluster.id, external_chat_id, chat_platform);
+      cluster = await dbService.getLatestOpenCluster(upId, type);
     }
     res.json(cluster);
   } catch (error) {
@@ -957,8 +1083,57 @@ app.get('/api/agent/clusters/latest', requireGoogleAuth, async (req, res) => {
 
 /**
  * @openapi
+ * /api/agent/clusters/{id}/chat-context:
+ *   post:
+ *     operationId: setChatContext
+ *     summary: Associa o aggiorna il riferimento alla chat esterna (Teams, Slack, etc.)
+ *     description: Memorizza l'ID del thread/conversazione Teams (external_chat_id) nel cluster per consentire al bot di riprendere la conversazione nello stesso thread dopo il periodo di sospensione.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID del cluster.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - external_chat_id
+ *             properties:
+ *               external_chat_id:
+ *                 type: string
+ *                 description: ID del thread/conversazione Teams o altra piattaforma.
+ *               chat_platform:
+ *                 type: string
+ *                 default: teams
+ *                 description: Piattaforma (es. teams, slack, custom).
+ *     responses:
+ *       200:
+ *         description: Riferimento chat salvato.
+ */
+app.post('/api/agent/clusters/:id/chat-context', requireGoogleAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { external_chat_id, chat_platform } = req.body;
+    if (!external_chat_id) {
+      return res.status(400).json({ error: 'Missing required parameter external_chat_id.' });
+    }
+    await dbService.updateClusterChatContext(parseInt(id), external_chat_id, chat_platform);
+    res.json({ success: true, message: 'Chat context updated successfully.', external_chat_id, chat_platform: chat_platform || 'teams' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @openapi
  * /api/agent/clusters/{id}/extend:
  *   post:
+ *     operationId: extendCluster
  *     summary: Estende l'intervallo temporale di un cluster esistente
  *     description: Aggiunge giorni o aggiorna la data finale di un cluster quando l'anomalia persiste, scrivendo un messaggio di sistema nella chat per notificare l'estensione senza creare un nuovo ticket.
  *     parameters:
@@ -1005,8 +1180,9 @@ app.post('/api/agent/clusters/:id/extend', requireGoogleAuth, async (req, res) =
  * @openapi
  * /api/agent/clusters/{id}/close:
  *   post:
- *     summary: Chiude un cluster come risolto
- *     description: Segna lo stato del cluster come 'closed' e aggiunge un messaggio finale di risoluzione alla chat.
+ *     operationId: closeCluster
+ *     summary: Risolve e chiude un cluster di anomalie
+ *     description: Segna lo stato del cluster come 'closed' ed inserisce una notifica di sistema nella chat con la categoria e le note di risoluzione.
  *     parameters:
  *       - in: path
  *         name: id
@@ -1045,6 +1221,7 @@ app.post('/api/agent/clusters/:id/close', requireGoogleAuth, async (req, res) =>
  * @openapi
  * /api/agent/clusters/{id}/suspend:
  *   post:
+ *     operationId: suspendCluster
  *     summary: Sospende temporaneamente un cluster di anomalie
  *     description: Segna lo stato del cluster come 'suspended', imposta una data di riattivazione futura ed inserisce una notifica di sistema nella chat.
  *     parameters:
@@ -1097,6 +1274,7 @@ app.post('/api/agent/clusters/:id/suspend', requireGoogleAuth, async (req, res) 
  * @openapi
  * /api/agent/clusters/{id}/reactivate:
  *   post:
+ *     operationId: reactivateCluster
  *     summary: Riattiva un cluster precedentemente sospeso
  *     description: Segna lo stato del cluster come 'open', rimuove la data di riattivazione ed inserisce una notifica di sistema nella chat.
  *     parameters:
@@ -1140,6 +1318,7 @@ app.post('/api/agent/clusters/:id/reactivate', requireGoogleAuth, async (req, re
  * @openapi
  * /api/agent/clusters/{id}:
  *   delete:
+ *     operationId: deleteCluster
  *     summary: Elimina un cluster di anomalie
  *     description: Rimuove permanentemente un cluster e tutti i suoi messaggi associati.
  *     parameters:
@@ -1167,6 +1346,7 @@ app.delete('/api/agent/clusters/:id', requireGoogleAuth, async (req, res) => {
  * @openapi
  * /api/agent/clusters/{id}/messages:
  *   get:
+ *     operationId: getClusterMessages
  *     summary: Ottiene la cronologia della chat del cluster
  *     parameters:
  *       - in: path
@@ -1179,6 +1359,7 @@ app.delete('/api/agent/clusters/:id', requireGoogleAuth, async (req, res) => {
  *       200:
  *         description: Elenco dei messaggi in ordine cronologico.
  *   post:
+ *     operationId: addClusterMessage
  *     summary: Invia un messaggio nella chat del cluster
  *     parameters:
  *       - in: path
@@ -1235,6 +1416,7 @@ app.post('/api/agent/clusters/:id/messages', requireGoogleAuth, async (req, res)
  * @openapi
  * /api/agent/diagnostics/test-day:
  *   post:
+ *     operationId: runDiagnosticsTestDay
  *     summary: Esegue un test di integrità istantaneo per una UP e una giornata
  *     description: Legge le letture ed esegue l'algoritmo di classificazione dell'integrità ritornando lo stato e il conteggio dei valori validi.
  *     requestBody:
@@ -1297,6 +1479,7 @@ app.post('/api/agent/diagnostics/test-day', requireGoogleAuth, async (req, res) 
  * @openapi
  * /api/agent/reports/audit:
  *   post:
+ *     operationId: generateAuditReport
  *     summary: Elabora un report di audit on-demand
  *     description: Esegue il controllo di integrità complessivo per un intervallo temporale e restituisce il report strutturato con le anomalie raggruppate per UP.
  *     requestBody:
@@ -1381,6 +1564,7 @@ app.post('/api/agent/reports/audit', requireGoogleAuth, async (req, res) => {
  * @openapi
  * /api/agent/registry/ups:
  *   post:
+ *     operationId: createUp
  *     summary: Aggiunge un impianto (UP) in anagrafica
  *     requestBody:
  *       required: true
@@ -1437,6 +1621,7 @@ app.post('/api/agent/registry/ups', requireGoogleAuth, requireAdmin, async (req,
  * @openapi
  * /api/agent/registry/ups/{id}:
  *   delete:
+ *     operationId: deleteUp
  *     summary: Rimuove un impianto (UP) dall'anagrafica
  *     parameters:
  *       - in: path
@@ -1463,11 +1648,13 @@ app.delete('/api/agent/registry/ups/:id', requireGoogleAuth, requireAdmin, async
  * @openapi
  * /api/agent/registry/ppa-partners:
  *   get:
+ *     operationId: getPpaPartners
  *     summary: Ottiene l'elenco dei partner PPA (controparti)
  *     responses:
  *       200:
  *         description: Lista dei partner PPA.
  *   post:
+ *     operationId: createPpaPartner
  *     summary: Crea un nuovo partner PPA (controparte)
  *     requestBody:
  *       required: true
@@ -1512,6 +1699,7 @@ app.post('/api/agent/registry/ppa-partners', requireGoogleAuth, requireAdmin, as
  * @openapi
  * /api/agent/registry/ppa-partners/{name}:
  *   delete:
+ *     operationId: deletePpaPartner
  *     summary: Elimina una controparte PPA
  *     parameters:
  *       - in: path
@@ -1538,6 +1726,7 @@ app.delete('/api/agent/registry/ppa-partners/:name', requireGoogleAuth, requireA
  * @openapi
  * /api/agent/registry/assignments:
  *   get:
+ *     operationId: getPpaAssignments
  *     summary: Ottiene l'elenco delle associazioni UP e partner PPA
  *     responses:
  *       200:
@@ -1561,6 +1750,7 @@ app.get('/api/agent/registry/assignments', requireGoogleAuth, async (req, res) =
  * @openapi
  * /api/agent/registry/assign:
  *   post:
+ *     operationId: assignPpaPartner
  *     summary: Assegna o rimuove un partner PPA ad una UP
  *     requestBody:
  *       required: true

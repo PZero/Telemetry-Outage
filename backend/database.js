@@ -88,9 +88,17 @@ async function initializeTables() {
         date TEXT,
         type TEXT,
         values_json TEXT,
+        is_simulated INTEGER DEFAULT 0,
         updated_at TEXT
       )
     `);
+
+    // Add is_simulated column to observations table if it doesn't exist (migration for existing database)
+    try {
+      await dbRun(`ALTER TABLE observations ADD COLUMN IF NOT EXISTS is_simulated INTEGER DEFAULT 0`);
+    } catch (e) {
+      console.log('[PG Migration] "is_simulated" column already exists or failed to add:', e.message);
+    }
 
     // 2. Outages Table
     await dbRun(`
@@ -182,6 +190,20 @@ async function initializeTables() {
       await dbRun(`ALTER TABLE clusters ADD COLUMN IF NOT EXISTS force_chat_update INTEGER DEFAULT 0`);
     } catch (e) {
       console.log('[PG Migration] "force_chat_update" column already exists or failed to add:', e.message);
+    }
+
+    // Add external_chat_id column to clusters table if it doesn't exist
+    try {
+      await dbRun(`ALTER TABLE clusters ADD COLUMN IF NOT EXISTS external_chat_id TEXT`);
+    } catch (e) {
+      console.log('[PG Migration] "external_chat_id" column already exists or failed to add:', e.message);
+    }
+
+    // Add chat_platform column to clusters table if it doesn't exist
+    try {
+      await dbRun(`ALTER TABLE clusters ADD COLUMN IF NOT EXISTS chat_platform TEXT DEFAULT 'teams'`);
+    } catch (e) {
+      console.log('[PG Migration] "chat_platform" column already exists or failed to add:', e.message);
     }
 
     // 7. Cluster Messages Table
@@ -285,15 +307,28 @@ export const dbService = {
     return row ? JSON.parse(row.values_json) : null;
   },
 
-  async saveObservations(upId, date, type, values) {
+  async getObservationsRecord(upId, date, type) {
+    const row = await dbGet(
+      'SELECT values_json, is_simulated FROM observations WHERE up_id = $1 AND date = $2 AND type = $3',
+      [upId, date, type]
+    );
+    if (!row) return null;
+    return {
+      values: JSON.parse(row.values_json),
+      isSimulated: row.is_simulated === 1 || row.is_simulated === true
+    };
+  },
+
+  async saveObservations(upId, date, type, values, isSimulated = false) {
     const key = `${upId}|${date}|${type}`;
     const valuesJson = JSON.stringify(values);
     const now = new Date().toISOString();
+    const simVal = isSimulated ? 1 : 0;
     await dbRun(`
-      INSERT INTO observations (key, up_id, date, type, values_json, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (key) DO UPDATE SET values_json = EXCLUDED.values_json, updated_at = EXCLUDED.updated_at
-    `, [key, upId, date, type, valuesJson, now]);
+      INSERT INTO observations (key, up_id, date, type, values_json, is_simulated, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (key) DO UPDATE SET values_json = EXCLUDED.values_json, is_simulated = EXCLUDED.is_simulated, updated_at = EXCLUDED.updated_at
+    `, [key, upId, date, type, valuesJson, simVal, now]);
     return true;
   },
 
@@ -489,18 +524,27 @@ export const dbService = {
     return await dbAll(sql, params);
   },
 
-  async createCluster(upId, type, startDate, endDate, notes) {
+  async createCluster(upId, type, startDate, endDate, notes, externalChatId = null, chatPlatform = 'teams') {
     const now = new Date().toISOString();
     const row = await dbGet(
-      'INSERT INTO clusters (up_id, type, start_date, end_date, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
-      [upId, type, startDate, endDate, 'open', now, now]
+      'INSERT INTO clusters (up_id, type, start_date, end_date, status, external_chat_id, chat_platform, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id',
+      [upId, type, startDate, endDate, 'open', externalChatId, chatPlatform || 'teams', now, now]
     );
     const clusterId = row.id;
     
     if (notes) {
       await this.addClusterMessage(clusterId, 'system', notes);
     }
-    return { id: clusterId, up_id: upId, type, start_date: startDate, end_date: endDate, status: 'open' };
+    return { id: clusterId, up_id: upId, type, start_date: startDate, end_date: endDate, status: 'open', external_chat_id: externalChatId, chat_platform: chatPlatform || 'teams' };
+  },
+
+  async updateClusterChatContext(clusterId, externalChatId, chatPlatform = 'teams') {
+    const now = new Date().toISOString();
+    await dbRun(
+      'UPDATE clusters SET external_chat_id = $1, chat_platform = $2, updated_at = $3 WHERE id = $4',
+      [externalChatId, chatPlatform || 'teams', now, clusterId]
+    );
+    return true;
   },
 
   async extendCluster(id, extendToDate, systemNotification) {

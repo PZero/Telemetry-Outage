@@ -820,6 +820,112 @@ main {
   color: var(--text-muted);
   text-transform: uppercase;
 }
+
+/* ==========================================
+   GLOBAL TOP SYNC PROGRESS BANNER & SPINNERS
+   ========================================== */
+.global-sync-banner {
+  background: linear-gradient(90deg, rgba(30, 58, 138, 0.95), rgba(15, 23, 42, 0.95));
+  border-bottom: 1px solid rgba(59, 130, 246, 0.4);
+  padding: 8px 24px;
+  color: #f8fafc;
+  font-size: 0.85rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  position: sticky;
+  top: 0;
+  z-index: 500;
+  backdrop-filter: blur(8px);
+  width: 100%;
+}
+.sync-banner-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+  width: 100%;
+}
+.sync-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-grow: 1;
+}
+.sync-spinner-icon {
+  animation: spin-sync 1.5s linear infinite;
+  display: inline-block;
+  font-size: 1.1rem;
+}
+@keyframes spin-sync {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.sync-banner-title {
+  font-weight: 700;
+  color: #60a5fa;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.sync-banner-subtitle {
+  color: #cbd5e1;
+  font-size: 0.78rem;
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sync-banner-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.global-progress-track {
+  width: 180px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.global-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #3b82f6, #10b981);
+  transition: width 0.3s ease;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.8);
+}
+.sync-percent-text {
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: #38bdf8;
+  min-width: 38px;
+}
+.btn-stop-sync {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-stop-sync:hover {
+  background: rgba(239, 68, 68, 0.4);
+  color: #ffffff;
+}
+
+.sync-spinner-sm {
+  display: inline-block;
+  animation: spin-sync 1.5s linear infinite;
+  font-size: 0.85rem;
+  margin-left: 6px;
+  vertical-align: middle;
+}
 .console-pre {
   flex-grow: 1;
   height: 100%;

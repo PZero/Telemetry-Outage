@@ -1,0 +1,720 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "Telemetry & Outage API",
+    "version": "1.0.0",
+    "description": "API REST per la verifica delle telemetrie METER/SCADA e la gestione dei cluster di anomalia."
+  },
+  "host": "telemetry-outage.onrender.com",
+  "basePath": "/",
+  "schemes": [
+    "https"
+  ],
+  "securityDefinitions": {
+    "api_key": {
+      "type": "apiKey",
+      "name": "Authorization",
+      "in": "header"
+    }
+  },
+  "security": [
+    {
+      "api_key": []
+    }
+  ],
+  "paths": {
+    "/api/registry": {
+      "get": {
+        "summary": "Ottiene l'elenco di tutte le Unita di Produzione (UP)",
+        "description": "Ritorna la lista completa di tutte le UP della flotta con i relativi attributi (tecnologia, capacita, flag disabilitazione scada, spegnimento notturno, ecc.).",
+        "operationId": "getRegistry",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Elenco delle UP caricato con successo.",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "tech": {
+                    "type": "string"
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "capacity": {
+                    "type": "number"
+                  },
+                  "ppa_partner": {
+                    "type": "string"
+                  },
+                  "scada_disabled": {
+                    "type": "boolean"
+                  },
+                  "solar_shutdown": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/agent/clusters": {
+      "get": {
+        "summary": "Ottiene l'elenco dei cluster di anomalie",
+        "description": "Ritorna una lista di cluster filtrata per stato, UP o tipo di anomalia.",
+        "operationId": "getClusters",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "description": "Filtra per stato del cluster.",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "open",
+              "closed"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "upId",
+            "description": "Filtra per ID impianto (UP).",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "description": "Filtra per tipo di anomalia.",
+            "required": false,
+            "type": "string",
+            "enum": [
+              "scada",
+              "meter",
+              "both"
+            ]
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Lista di cluster trovati."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/latest": {
+      "get": {
+        "summary": "Recupera o crea il cluster di anomalie più recente",
+        "description": "Ritorna il cluster aperto più recente per un impianto e tipo. Se non esiste, crea automaticamente un nuovo cluster aperto per attivare il flusso di chat con i process owner.",
+        "operationId": "getLatestCluster",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "upId",
+            "description": "ID dell'impianto.",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "in": "query",
+            "name": "type",
+            "description": "Tipo di anomalia.",
+            "required": true,
+            "type": "string",
+            "enum": [
+              "scada",
+              "meter",
+              "both"
+            ]
+          },
+          {
+            "in": "query",
+            "name": "startDate",
+            "description": "Data di inizio da usare se viene creato un nuovo cluster (YYYY-MM-DD).",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "in": "query",
+            "name": "notes",
+            "description": "Messaggio di sistema iniziale se viene creato un nuovo cluster.",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "in": "query",
+            "name": "external_chat_id",
+            "description": "ID della chat/thread di Teams o altra piattaforma (es. 19:meeting_... o thread.v2).",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "in": "query",
+            "name": "chat_platform",
+            "description": "Nome della piattaforma (es. teams, slack, custom).",
+            "required": false,
+            "type": "string",
+            "default": "teams"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cluster esistente o appena creato con riferimenti chat."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/{id}/chat-context": {
+      "post": {
+        "summary": "Associa o aggiorna il riferimento alla chat esterna (Teams, Slack, etc.)",
+        "description": "Memorizza l'ID del thread/conversazione Teams (external_chat_id) nel cluster per consentire al bot di riprendere la conversazione nello stesso thread dopo il periodo di sospensione.",
+        "operationId": "setChatContext",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "external_chat_id"
+              ],
+              "properties": {
+                "external_chat_id": {
+                  "type": "string",
+                  "description": "ID del thread/conversazione Teams o altra piattaforma."
+                },
+                "chat_platform": {
+                  "type": "string",
+                  "default": "teams",
+                  "description": "Piattaforma (es. teams, slack, custom)."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Riferimento chat salvato."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/{id}/extend": {
+      "post": {
+        "summary": "Estende l'intervallo temporale di un cluster esistente",
+        "description": "Aggiunge giorni o aggiorna la data finale di un cluster quando l'anomalia persiste, scrivendo un messaggio di sistema nella chat per notificare l'estensione senza creare un nuovo ticket.",
+        "operationId": "extendCluster",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "extendToDate"
+              ],
+              "properties": {
+                "extendToDate": {
+                  "type": "string",
+                  "description": "Nuova data di fine del cluster (YYYY-MM-DD)."
+                },
+                "systemNotification": {
+                  "type": "string",
+                  "description": "Messaggio di notifica da inserire nello storico chat."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Estensione completata con successo."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/{id}/close": {
+      "post": {
+        "summary": "Risolve e chiude un cluster di anomalie",
+        "description": "Segna lo stato del cluster come 'closed' ed inserisce una notifica di sistema nella chat con la categoria e le note di risoluzione.",
+        "operationId": "closeCluster",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "resolutionCategory": {
+                  "type": "string",
+                  "description": "Categoria di risoluzione del problema."
+                },
+                "resolutionNotes": {
+                  "type": "string",
+                  "description": "Dettagli o note conclusive sulla risoluzione."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Chiusura completata con successo."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/{id}/suspend": {
+      "post": {
+        "summary": "Sospende temporaneamente un cluster di anomalie",
+        "description": "Segna lo stato del cluster come 'suspended', imposta una data di riattivazione futura ed inserisce una notifica di sistema nella chat.",
+        "operationId": "suspendCluster",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "reactivationDate"
+              ],
+              "properties": {
+                "reactivationDate": {
+                  "type": "string",
+                  "description": "Data in cui il cluster deve essere riattivato (YYYY-MM-DD)."
+                },
+                "notes": {
+                  "type": "string",
+                  "description": "Motivazione della sospensione temporanea."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sospensione registrata con successo."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/{id}/reactivate": {
+      "post": {
+        "summary": "Riattiva un cluster precedentemente sospeso",
+        "description": "Segna lo stato del cluster come 'open', rimuove la data di riattivazione ed inserisce una notifica di sistema nella chat.",
+        "operationId": "reactivateCluster",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": false,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "notes": {
+                  "type": "string",
+                  "description": "Note aggiuntive sulla riattivazione."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Riattivazione completata con successo."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/{id}": {
+      "delete": {
+        "summary": "Elimina un cluster di anomalie",
+        "description": "Rimuove permanentemente un cluster e tutti i suoi messaggi associati.",
+        "operationId": "deleteCluster",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Eliminazione completata con successo."
+          }
+        }
+      }
+    },
+    "/api/agent/clusters/{id}/messages": {
+      "get": {
+        "summary": "Ottiene la cronologia della chat del cluster",
+        "operationId": "getClusterMessages",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Elenco dei messaggi in ordine cronologico."
+          }
+        }
+      },
+      "post": {
+        "summary": "Invia un messaggio nella chat del cluster",
+        "operationId": "addClusterMessage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID del cluster.",
+            "required": true,
+            "type": "integer"
+          },
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "sender",
+                "messageText"
+              ],
+              "properties": {
+                "sender": {
+                  "type": "string",
+                  "description": "Autore del messaggio (es. 'agent' o nome utente)."
+                },
+                "messageText": {
+                  "type": "string",
+                  "description": "Testo del messaggio da inviare."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messaggio inviato con successo."
+          }
+        }
+      }
+    },
+    "/api/agent/diagnostics/test-day": {
+      "post": {
+        "summary": "Esegue un test di integrità istantaneo per una UP e una giornata",
+        "description": "Legge le letture ed esegue l'algoritmo di classificazione dell'integrità ritornando lo stato e il conteggio dei valori validi.",
+        "operationId": "runDiagnosticsTestDay",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "upId",
+                "date"
+              ],
+              "properties": {
+                "upId": {
+                  "type": "string",
+                  "description": "ID dell'impianto."
+                },
+                "date": {
+                  "type": "string",
+                  "description": "Data da verificare (YYYY-MM-DD)."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Esito del test di integrità."
+          }
+        }
+      }
+    },
+    "/api/agent/reports/audit": {
+      "post": {
+        "summary": "Elabora un report di audit on-demand",
+        "description": "Esegue il controllo di integrità complessivo per un intervallo temporale e restituisce il report strutturato con le anomalie raggruppate per UP.",
+        "operationId": "generateAuditReport",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "startDate",
+                "endDate"
+              ],
+              "properties": {
+                "startDate": {
+                  "type": "string",
+                  "description": "Data inizio audit (YYYY-MM-DD)."
+                },
+                "endDate": {
+                  "type": "string",
+                  "description": "Data fine audit (YYYY-MM-DD)."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Report di audit calcolato."
+          }
+        }
+      }
+    },
+    "/api/agent/registry/ups": {
+      "post": {
+        "summary": "Aggiunge un impianto (UP) in anagrafica",
+        "operationId": "createUp",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "tech",
+                "region",
+                "capacity"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "tech": {
+                  "type": "string",
+                  "enum": [
+                    "Solar",
+                    "Wind"
+                  ]
+                },
+                "region": {
+                  "type": "string"
+                },
+                "capacity": {
+                  "type": "number"
+                },
+                "lat": {
+                  "type": "number"
+                },
+                "lon": {
+                  "type": "number"
+                },
+                "ppa_partner": {
+                  "type": "string"
+                },
+                "scada_disabled": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "UP aggiunta correttamente."
+          }
+        }
+      }
+    },
+    "/api/agent/registry/ups/{id}": {
+      "delete": {
+        "summary": "Rimuove un impianto (UP) dall'anagrafica",
+        "operationId": "deleteUp",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "description": "ID della UP.",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "UP rimossa correttamente."
+          }
+        }
+      }
+    },
+    "/api/agent/registry/ppa-partners": {
+      "get": {
+        "summary": "Ottiene l'elenco dei partner PPA (controparti)",
+        "operationId": "getPpaPartners",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Lista dei partner PPA."
+          }
+        }
+      },
+      "post": {
+        "summary": "Crea un nuovo partner PPA (controparte)",
+        "operationId": "createPpaPartner",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "color": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Partner PPA aggiunto correttamente."
+          }
+        }
+      }
+    },
+    "/api/agent/registry/ppa-partners/{name}": {
+      "delete": {
+        "summary": "Elimina una controparte PPA",
+        "operationId": "deletePpaPartner",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "description": "Nome della controparte.",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Controparte eliminata correttamente."
+          }
+        }
+      }
+    },
+    "/api/agent/registry/assignments": {
+      "get": {
+        "summary": "Ottiene l'elenco delle associazioni UP e partner PPA",
+        "operationId": "getPpaAssignments",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Elenco degli accoppiamenti UP-PPA."
+          }
+        }
+      }
+    },
+    "/api/agent/registry/assign": {
+      "post": {
+        "summary": "Assegna o rimuove un partner PPA ad una UP",
+        "operationId": "assignPpaPartner",
+        "parameters": [
+          {
+            "in": "body",
+            "name": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "required": [
+                "upId"
+              ],
+              "properties": {
+                "upId": {
+                  "type": "string"
+                },
+                "ppaTag": {
+                  "type": "string",
+                  "description": "Nome del partner PPA. Impostare a null per disassociare."
+                }
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assegnazione aggiornata correttamente."
+          }
+        }
+      }
+    }
+  }
+}

@@ -117,9 +117,10 @@ export async function requireGoogleAuth(req, res, next) {
   }
 
   // ----------------------------------------------------
-  // SECURE PRODUCTION MODE (Google ID Token Verification)
+  // SECURE PRODUCTION MODE (Google ID Token & Access Token Verification)
   // ----------------------------------------------------
   try {
+    // 1. Try OIDC ID Token verification (JWT format)
     const oauthClient = getOAuthClient();
     const ticket = await oauthClient.verifyIdToken({
       idToken: token,
@@ -127,15 +128,14 @@ export async function requireGoogleAuth(req, res, next) {
     });
     
     const payload = ticket.getPayload();
-    if (!payload) {
-      throw new Error('Google ID Token payload is empty.');
+    if (!payload || !payload.email) {
+      throw new Error('Google ID Token payload is empty or invalid.');
     }
 
     const email = payload.email;
     const name = payload.name;
     const authResult = await syncAndGetUserRole(email, name);
 
-    // Attach verified user info to request
     req.user = {
       email,
       name,
@@ -144,7 +144,6 @@ export async function requireGoogleAuth(req, res, next) {
       approved: authResult.approved
     };
 
-    // Block non-approved users from all routes except profile endpoint
     if (email !== 'fnicora@gmail.com' && authResult.approved !== 1) {
       const isProfileRoute = req.path === '/auth/profile' || req.path === '/api/auth/profile' || req.path.includes('/auth/profile');
       if (!isProfileRoute) {
@@ -152,10 +151,45 @@ export async function requireGoogleAuth(req, res, next) {
       }
     }
 
-    next();
-  } catch (error) {
-    console.error('[Auth Error] Google token verification failed:', error.message);
-    res.status(401).json({ error: `Authentication failed: ${error.message}` });
+    return next();
+  } catch (idTokenError) {
+    // 2. Fallback to Google OAuth 2.0 UserInfo API verification (for Access Tokens starting with 'ya29...' sent by Copilot Studio)
+    try {
+      const userinfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      if (userinfoRes.ok) {
+        const payload = await userinfoRes.json();
+        if (payload && payload.email) {
+          const email = payload.email;
+          const name = payload.name || payload.email;
+          const authResult = await syncAndGetUserRole(email, name);
+
+          req.user = {
+            email,
+            name,
+            picture: payload.picture,
+            role: authResult.role,
+            approved: authResult.approved
+          };
+
+          if (email !== 'fnicora@gmail.com' && authResult.approved !== 1) {
+            const isProfileRoute = req.path === '/auth/profile' || req.path === '/api/auth/profile' || req.path.includes('/auth/profile');
+            if (!isProfileRoute) {
+              return res.status(403).json({ error: 'USER_NOT_APPROVED', approved: authResult.approved });
+            }
+          }
+
+          return next();
+        }
+      }
+    } catch (userInfoError) {
+      console.error('[Auth Error] Google Access Token verification failed:', userInfoError.message);
+    }
+
+    console.error('[Auth Error] Google token verification failed:', idTokenError.message);
+    return res.status(401).json({ error: `Authentication failed: ${idTokenError.message}` });
   }
 }
 

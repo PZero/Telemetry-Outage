@@ -307,8 +307,18 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
     const maxChars = up.ppaTag ? 12 : 18;
     const displayName = up.name.length > maxChars ? up.name.substring(0, maxChars - 2) + "..." : up.name;
 
+    const activeTasksMap = window.appState && window.appState.activeSyncTasks;
+    const isUpSyncing = activeTasksMap && Object.keys(activeTasksMap).some(k => k.startsWith(up.id + '|'));
+
     ctx.fillStyle = noScada ? "#f59e0b" : "#f3f4f6";
     ctx.fillText(displayName, 8, y + 14);
+
+    if (isUpSyncing) {
+      const nameW = ctx.measureText(displayName).width;
+      ctx.fillStyle = "#38bdf8";
+      ctx.font = "bold 10px Arial";
+      ctx.fillText(" 🔄", 8 + nameW, y + 14);
+    }
 
     if (up.ppaTag) {
       const nameWidth = ctx.measureText(displayName).width;
