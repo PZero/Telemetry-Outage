@@ -820,9 +820,10 @@
             
             <div style="display: flex; flex-direction: column; gap: 6px;">
               <label style="font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Unità di Produzione (UP)</label>
-              <select id="export-up-select" class="custom-select" style="width: 100%; background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); border-radius: 6px; padding: 8px; font-size: 0.8rem; outline: none; cursor: pointer;">
+              <input type="text" id="export-up-input" list="export-up-list" class="custom-select" placeholder="Digita codice UP o seleziona dall'anagrafica..." style="width: 100%; background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); border-radius: 6px; padding: 8px; font-size: 0.8rem; outline: none;">
+              <datalist id="export-up-list">
                 <!-- Dynamically filled -->
-              </select>
+              </datalist>
             </div>
 
             <div style="display: flex; flex-direction: column; gap: 6px;">
