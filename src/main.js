@@ -2789,7 +2789,8 @@ async function loadUsersTable() {
 let isExportInitialized = false;
 
 function initExportView() {
-  const upSelect = document.getElementById("export-up-select");
+  const upInput = document.getElementById("export-up-input") || document.getElementById("export-up-select");
+  const upDatalist = document.getElementById("export-up-list");
   const startDateInput = document.getElementById("export-start-date");
   const endDateInput = document.getElementById("export-end-date");
   const exportBtn = document.getElementById("export-btn");
@@ -2798,17 +2799,25 @@ function initExportView() {
   const previewTbody = document.getElementById("export-preview-tbody");
   const rowCountSpan = document.getElementById("export-row-count");
 
-  if (!upSelect || !startDateInput || !endDateInput) return;
+  if (!upInput || !startDateInput || !endDateInput) return;
 
-  // 1. Populate UP select (if not already populated)
-  if (upSelect.children.length <= 1) {
-    upSelect.innerHTML = '<option value="" disabled selected>Seleziona un\'UP...</option>';
+  // 1. Populate UP datalist autocomplete suggestions (if available and empty)
+  if (upDatalist && upDatalist.children.length === 0) {
+    const sortedUPs = [...UP_REGISTRY].sort((a, b) => a.id.localeCompare(b.id));
+    sortedUPs.forEach(up => {
+      const opt = document.createElement("option");
+      opt.value = up.id;
+      opt.label = `${up.id} - ${up.name}`;
+      upDatalist.appendChild(opt);
+    });
+  } else if (upInput.tagName === "SELECT" && upInput.children.length <= 1) {
+    upInput.innerHTML = '<option value="" disabled selected>Seleziona un\'UP...</option>';
     const sortedUPs = [...UP_REGISTRY].sort((a, b) => a.id.localeCompare(b.id));
     sortedUPs.forEach(up => {
       const opt = document.createElement("option");
       opt.value = up.id;
       opt.innerText = `${up.id} - ${up.name}`;
-      upSelect.appendChild(opt);
+      upInput.appendChild(opt);
     });
   }
 
@@ -2827,12 +2836,16 @@ function initExportView() {
 
   // 4. Hook fetch/sync button
   exportBtn.onclick = async () => {
-    const upId = upSelect.value;
+    let rawVal = upInput.value ? upInput.value.trim() : "";
+    if (rawVal.includes(" - ")) {
+      rawVal = rawVal.split(" - ")[0].trim();
+    }
+    const upId = rawVal ? rawVal.toUpperCase() : "";
     const startDate = startDateInput.value;
     const endDate = endDateInput.value;
 
     if (!upId) {
-      alert("Per favore seleziona un'Unità di Produzione (UP).");
+      alert("Per favore inserisci o seleziona un'Unità di Produzione (UP).");
       return;
     }
     if (!startDate || !endDate) {
