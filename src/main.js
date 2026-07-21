@@ -2865,7 +2865,7 @@ function initExportView() {
     rowCountSpan.innerText = "0 righe caricate";
 
     try {
-      const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+      const BASE_URL = import.meta.env.VITE_API_URL || (window.location.hostname === "localhost" ? "http://localhost:3000" : "https://telemetry-outage.onrender.com");
       const response = await fetch(`${BASE_URL}/api/registry/sync-range`, {
         method: "POST",
         headers: {

@@ -772,9 +772,12 @@ app.post('/api/registry/sync-range', requireGoogleAuth, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields: upId, startDate, endDate.' });
     }
     
-    const up = await dbService.getUPById(upId);
+    let up = await dbService.getUPById(upId);
     if (!up) {
-      return res.status(404).json({ error: `UP not found: ${upId}` });
+      const isWind = upId.toLowerCase().includes('wind');
+      const tech = isWind ? 'Wind' : 'Solar';
+      await dbService.saveUP(upId, upId, tech, 'Italia', 10.0, 0, 0, null, 0, 0);
+      up = await dbService.getUPById(upId);
     }
 
     const simMode = (process.env.AZURE_MOCK_TELEMETRY === 'true') || 
