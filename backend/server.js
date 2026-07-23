@@ -1211,27 +1211,29 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           },
           {
             name: "setClusterChatContext",
-            description: "Associa o aggiorna l'ID della chat esterna (es. Teams) ed eventualmente la piattaforma chat a un determinato cluster di anomalie.",
+            description: "Associa o aggiorna il riferimento alla chat/thread Teams per un cluster di anomalie tramite upId o clusterId.",
             parameters: {
               type: "OBJECT",
               properties: {
-                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster di anomalie (es. 16, 17)" },
-                externalChatId: { type: "STRING", description: "L'ID o la stringa della chat esterna (es. 'Questo è un idchat inventato', '19:meeting...-thread.v2')" },
-                chatPlatform: { type: "STRING", description: "La piattaforma chat (default: 'teams')" }
+                upId: { type: "STRING", description: "Codice o nome dell'Unità di Produzione (es. UPN_S16G1GN_01, GARNACHA)" },
+                clusterId: { type: "INTEGER", description: "Identificativo numerico del cluster" },
+                externalChatId: { type: "STRING", description: "ID della chat esterna" },
+                chatPlatform: { type: "STRING", description: "Piattaforma chat (default: 'teams')" }
               },
-              required: ["clusterId", "externalChatId"]
+              required: ["externalChatId"]
             }
           },
           {
             name: "suspendCluster",
-            description: "Sospende temporaneamente un cluster di anomalie impostando uno stato di pausa fino a una data di riattivazione indicata.",
+            description: "Sospende temporaneamente un cluster di anomalie per l'impianto indicato impostando uno stato di pausa fino alla data di riattivazione calcolata.",
             parameters: {
               type: "OBJECT",
               properties: {
-                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster da sospendere" },
+                upId: { type: "STRING", description: "Codice dell'Unità di Produzione (es. UPN_S16G1GN_01, GARNACHA)" },
+                clusterId: { type: "INTEGER", description: "Identificativo del cluster" },
                 reactivationDate: { type: "STRING", description: "La data in formato YYYY-MM-DD fino a cui sospendere il ticket" }
               },
-              required: ["clusterId", "reactivationDate"]
+              required: ["reactivationDate"]
             }
           },
           {
@@ -1240,9 +1242,9 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             parameters: {
               type: "OBJECT",
               properties: {
-                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster da riattivare" }
-              },
-              required: ["clusterId"]
+                upId: { type: "STRING", description: "Codice dell'Unità di Produzione" },
+                clusterId: { type: "INTEGER", description: "Identificativo del cluster" }
+              }
             }
           },
           {
@@ -1251,11 +1253,11 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             parameters: {
               type: "OBJECT",
               properties: {
-                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster da chiudere" },
+                upId: { type: "STRING", description: "Codice dell'Unità di Produzione" },
+                clusterId: { type: "INTEGER", description: "Identificativo del cluster" },
                 resolutionCategory: { type: "STRING", description: "Categoria opzionale di intervento/risoluzione" },
                 resolutionNotes: { type: "STRING", description: "Note dettagliate sulla risoluzione dell'anomalia" }
-              },
-              required: ["clusterId"]
+              }
             }
           },
           {
@@ -1264,11 +1266,12 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             parameters: {
               type: "OBJECT",
               properties: {
-                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster" },
+                upId: { type: "STRING", description: "Codice dell'Unità di Produzione" },
+                clusterId: { type: "INTEGER", description: "Identificativo del cluster" },
                 extendToDate: { type: "STRING", description: "La nuova data finale YYYY-MM-DD" },
                 notes: { type: "STRING", description: "Note informative sull'estensione" }
               },
-              required: ["clusterId", "extendToDate"]
+              required: ["extendToDate"]
             }
           }
         ];
@@ -1413,33 +1416,103 @@ function sanitizeCluster(c) {
               addTrace(method, endpoint, args, 200, toolResult);
             } else if (func.name === "setClusterChatContext") {
               method = "POST";
-              endpoint = `/api/agent/clusters/${args.clusterId}/chat-context`;
-              await dbService.updateClusterChatContext(args.clusterId, args.externalChatId, args.chatPlatform || 'teams');
-              toolResult = { success: true, external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' };
+              let targetClusterId = args.clusterId;
+              const targetUpId = args.upId || args.up_id;
+              if (!targetClusterId && targetUpId) {
+                const cluster = await dbService.getLatestOpenCluster(targetUpId);
+                targetClusterId = cluster?.id;
+              }
+              if (!targetClusterId) {
+                const cluster = await dbService.getLatestOpenCluster();
+                targetClusterId = cluster?.id;
+              }
+              endpoint = `/api/agent/clusters/${targetClusterId || 0}/chat-context`;
+              if (targetClusterId) {
+                await dbService.updateClusterChatContext(targetClusterId, args.externalChatId, args.chatPlatform || 'teams');
+                toolResult = { success: true, external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' };
+              } else {
+                toolResult = { success: false, error: "Nessun cluster aperto trovato per l'associazione chat." };
+              }
               addTrace(method, endpoint, { external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' }, 200, toolResult);
             } else if (func.name === "suspendCluster") {
               method = "POST";
-              endpoint = `/api/agent/clusters/${args.clusterId}/suspend`;
-              await dbService.suspendCluster(args.clusterId, args.reactivationDate);
-              toolResult = { success: true, status: 'suspended', reactivation_date: args.reactivationDate };
+              let targetClusterId = args.clusterId;
+              const targetUpId = args.upId || args.up_id;
+              if (!targetClusterId && targetUpId) {
+                const cluster = await dbService.getLatestOpenCluster(targetUpId);
+                targetClusterId = cluster?.id;
+              }
+              if (!targetClusterId) {
+                const cluster = await dbService.getLatestOpenCluster();
+                targetClusterId = cluster?.id;
+              }
+              endpoint = `/api/agent/clusters/${targetClusterId || 0}/suspend`;
+              if (targetClusterId) {
+                await dbService.suspendCluster(targetClusterId, args.reactivationDate);
+                toolResult = { success: true, status: 'suspended', reactivation_date: args.reactivationDate };
+              } else {
+                toolResult = { success: false, error: "Nessun cluster aperto trovato da sospendere." };
+              }
               addTrace(method, endpoint, { reactivation_date: args.reactivationDate }, 200, toolResult);
             } else if (func.name === "reactivateCluster") {
               method = "POST";
-              endpoint = `/api/agent/clusters/${args.clusterId}/reactivate`;
-              await dbService.reactivateCluster(args.clusterId);
-              toolResult = { success: true, status: 'open' };
+              let targetClusterId = args.clusterId;
+              const targetUpId = args.upId || args.up_id;
+              if (!targetClusterId && targetUpId) {
+                const cluster = await dbService.getLatestOpenCluster(targetUpId);
+                targetClusterId = cluster?.id;
+              }
+              if (!targetClusterId) {
+                const cluster = await dbService.getLatestOpenCluster();
+                targetClusterId = cluster?.id;
+              }
+              endpoint = `/api/agent/clusters/${targetClusterId || 0}/reactivate`;
+              if (targetClusterId) {
+                await dbService.reactivateCluster(targetClusterId);
+                toolResult = { success: true, status: 'open' };
+              } else {
+                toolResult = { success: false, error: "Nessun cluster sospeso trovato da riattivare." };
+              }
               addTrace(method, endpoint, null, 200, toolResult);
             } else if (func.name === "closeCluster") {
               method = "POST";
-              endpoint = `/api/agent/clusters/${args.clusterId}/close`;
-              await dbService.closeCluster(args.clusterId, args.resolutionCategory, args.resolutionNotes);
-              toolResult = { success: true, status: 'closed' };
+              let targetClusterId = args.clusterId;
+              const targetUpId = args.upId || args.up_id;
+              if (!targetClusterId && targetUpId) {
+                const cluster = await dbService.getLatestOpenCluster(targetUpId);
+                targetClusterId = cluster?.id;
+              }
+              if (!targetClusterId) {
+                const cluster = await dbService.getLatestOpenCluster();
+                targetClusterId = cluster?.id;
+              }
+              endpoint = `/api/agent/clusters/${targetClusterId || 0}/close`;
+              if (targetClusterId) {
+                await dbService.closeCluster(targetClusterId, args.resolutionCategory, args.resolutionNotes);
+                toolResult = { success: true, status: 'closed' };
+              } else {
+                toolResult = { success: false, error: "Nessun cluster aperto trovato da chiudere." };
+              }
               addTrace(method, endpoint, { resolutionCategory: args.resolutionCategory, resolutionNotes: args.resolutionNotes }, 200, toolResult);
             } else if (func.name === "extendCluster") {
               method = "POST";
-              endpoint = `/api/agent/clusters/${args.clusterId}/extend`;
-              await dbService.extendCluster(args.clusterId, args.extendToDate, args.notes || 'Estensione cluster da agent chat');
-              toolResult = { success: true, extendToDate: args.extendToDate };
+              let targetClusterId = args.clusterId;
+              const targetUpId = args.upId || args.up_id;
+              if (!targetClusterId && targetUpId) {
+                const cluster = await dbService.getLatestOpenCluster(targetUpId);
+                targetClusterId = cluster?.id;
+              }
+              if (!targetClusterId) {
+                const cluster = await dbService.getLatestOpenCluster();
+                targetClusterId = cluster?.id;
+              }
+              endpoint = `/api/agent/clusters/${targetClusterId || 0}/extend`;
+              if (targetClusterId) {
+                await dbService.extendCluster(targetClusterId, args.extendToDate, args.notes || 'Estensione cluster da agent chat');
+                toolResult = { success: true, extendToDate: args.extendToDate };
+              } else {
+                toolResult = { success: false, error: "Nessun cluster aperto trovato da estendere." };
+              }
               addTrace(method, endpoint, { extendToDate: args.extendToDate, notes: args.notes }, 200, toolResult);
             }
 
@@ -1670,7 +1743,7 @@ function sanitizeCluster(c) {
             answer = "Impossibile associare la chat Teams perché non è stato trovato alcun cluster aperto a cui collegarla.";
           }
         }
-        else if (msg.includes("sospendi") || msg.includes("metti in pausa") || msg.includes("settimana") || msg.includes("giorni") || msg.includes("tempo") || msg.includes("vorrà") || msg.includes("servirà")) {
+        else if (msg.includes("sospendi") || msg.includes("metti in pausa") || msg.includes("settimana") || msg.includes("giorni") || msg.includes("giorno") || msg.includes("tempo") || msg.includes("vorrà") || msg.includes("servirà")) {
           const cluster = await dbService.getLatestOpenCluster();
           if (cluster) {
             let days = 7;
@@ -1683,7 +1756,7 @@ function sanitizeCluster(c) {
             const reactDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
             await dbService.suspendCluster(cluster.id, reactDate);
             addTrace("POST", `/api/agent/clusters/${cluster.id}/suspend`, { reactivation_date: reactDate }, 200, { success: true });
-            answer = `Ho interpretato la tua indicazione come richiesta di sospensione. Il cluster #${cluster.id} per l'impianto ${cluster.up_id} è stato sospeso con successo per ${days} giorni (fino al ${reactDate}).`;
+            answer = `Ho interpretato l'indicazione sulle tempistiche (${days} giorni). Il cluster per l'impianto **${cluster.up_id}** è stato sospeso con successo fino al **${reactDate}**.`;
           } else {
             answer = "Impossibile sospendere: nessun cluster aperto trovato nel sistema.";
           }
@@ -1693,7 +1766,7 @@ function sanitizeCluster(c) {
           if (cluster) {
             await dbService.reactivateCluster(cluster.id);
             addTrace("POST", `/api/agent/clusters/${cluster.id}/reactivate`, null, 200, { success: true });
-            answer = `Il cluster #${cluster.id} è stato riattivato con successo. L'agente ha ripreso il monitoraggio attivo del ticket.`;
+            answer = `Il cluster per l'impianto **${cluster.up_id}** è stato riattivato con successo. L'agente ha ripreso il monitoraggio attivo del ticket.`;
           } else {
             answer = "Nessun cluster da riattivare trovato.";
           }
@@ -1703,7 +1776,7 @@ function sanitizeCluster(c) {
           if (cluster) {
             await dbService.closeCluster(cluster.id);
             addTrace("POST", `/api/agent/clusters/${cluster.id}/close`, null, 200, { success: true });
-            answer = `Il cluster #${cluster.id} è stato chiuso e risolto. L'agente ha salvato lo stato finale a database.`;
+            answer = `Il cluster per l'impianto **${cluster.up_id}** è stato chiuso e risolto con successo.`;
           } else {
             answer = "Nessun cluster aperto da poter chiudere o risolvere.";
           }
