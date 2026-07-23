@@ -3282,7 +3282,21 @@ function initHandoverView() {
 
         if (response.ok) {
           const data = await response.json();
-          botBubble.innerText = data.answer || "Risposta vuota dal server.";
+          let botHtml = data.answer || "Risposta vuota dal server.";
+          if (data.engine) {
+            const isLive = data.engine.includes("Live LLM");
+            const badgeColor = isLive ? "#34d399" : "#fbbf24";
+            const badgeBg = isLive ? "rgba(52, 211, 153, 0.1)" : "rgba(251, 191, 36, 0.1)";
+            botHtml += `<div style="margin-top: 8px; font-size: 0.65rem; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
+              <span>Motore:</span>
+              <span style="padding: 2px 6px; background: ${badgeBg}; border: 1px solid ${badgeColor}; border-radius: 4px; color: ${badgeColor}; font-weight: 600;">
+                ${data.engine}
+              </span>
+            </div>`;
+            botBubble.innerHTML = botHtml;
+          } else {
+            botBubble.innerText = botHtml;
+          }
           chatHistory.appendChild(botBubble);
 
           // Render trace logs

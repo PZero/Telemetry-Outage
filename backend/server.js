@@ -1123,6 +1123,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
     const msg = message.toLowerCase();
     const trace = [];
     let answer = "";
+    let isRealGemini = false;
 
     const addTrace = (method, endpoint, requestBody, status, responseBody) => {
       trace.push({
@@ -1180,6 +1181,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         });
 
         if (response.ok) {
+          isRealGemini = true;
           const geminiData = await response.json();
           const firstCandidate = geminiData.candidates?.[0];
           const part = firstCandidate?.content?.parts?.[0];
@@ -1360,7 +1362,11 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
       }
     }
 
-    res.json({ answer, trace });
+    res.json({
+      answer,
+      trace,
+      engine: isRealGemini ? 'Gemini 1.5 Flash (Live LLM)' : 'Motore Semantico di Handover (Risposte Precompilate)'
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
