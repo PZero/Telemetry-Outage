@@ -61,6 +61,7 @@ export async function loadUPRegistry() {
     // Map DB field ppa_partner → ppaTag so the frontend PPA filter works correctly
     UP_REGISTRY.push(...data.map(up => {
       const u = { ...up };
+      u.id = up.id || up.name;
       u.ppaTag = u.ppa_partner || u.ppaTag || null;
       delete u.ppa_partner; // Prevent database override of updated ppaTag values
       u.scada_disabled = u.scada_disabled === 1 || u.scada_disabled === true;

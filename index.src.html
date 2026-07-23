@@ -1102,6 +1102,26 @@ Attiva un'acquisizione storica per visualizzare il registro delle richieste sequ
         <div id="handover-panel-manual" style="display: flex; gap: 20px; flex-grow: 1; min-height: 0;">
           <!-- Left Column: Rich Guidelines -->
           <div class="app-card" style="flex: 1; padding: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto;">
+            <!-- Link Swagger & Download Specifications -->
+            <div style="padding: 12px; background: rgba(59,130,246,0.05); border: 1px solid rgba(59,130,246,0.15); border-radius: 8px; display: flex; flex-direction: column; gap: 8px;">
+              <div style="font-size: 0.8rem; font-weight: 700; color: var(--text-main); display: flex; align-items: center; gap: 6px;">
+                <span>📘</span> Documentazione Swagger API & Download
+              </div>
+              <div style="display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.72rem;">
+                <a href="/api-docs" target="_blank" style="color: #60a5fa; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                  🌐 Apri Swagger UI
+                </a>
+                <span style="color: rgba(255,255,255,0.15);">|</span>
+                <a href="/swagger.yaml" target="_blank" style="color: #34d399; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                  📥 Specifica YAML
+                </a>
+                <span style="color: rgba(255,255,255,0.15);">|</span>
+                <a href="/swagger.csv" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                  📥 Elenco CSV
+                </a>
+              </div>
+            </div>
+
             <h3 style="margin: 0; font-size: 1rem; color: #3b82f6; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">Guida ai Flussi Conversazionali degli Agenti</h3>
             
             <div style="display: flex; flex-direction: column; gap: 14px;">

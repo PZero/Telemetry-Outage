@@ -36,6 +36,24 @@ app.use((req, res, next) => {
 // Parse JSON request bodies
 app.use(express.json());
 
+// Middleware to resolve UP names/custom codes to SQLite DB IDs
+app.use(async (req, res, next) => {
+  try {
+    if (req.query && req.query.upId) {
+      req.query.upId = await dbService.resolveDbId(req.query.upId);
+    }
+    if (req.body && req.body.upId) {
+      req.body.upId = await dbService.resolveDbId(req.body.upId);
+    }
+    if (req.params && req.params.upId) {
+      req.params.upId = await dbService.resolveDbId(req.params.upId);
+    }
+    next();
+  } catch (error) {
+    res.status(500).json({ error: 'Error resolving UP ID: ' + error.message });
+  }
+});
+
 // --- SWAGGER / OPENAPI SETUP ---
 const swaggerOptions = {
   definition: {
@@ -43,7 +61,12 @@ const swaggerOptions = {
     info: {
       title: 'Telemetry & Outage Integrity API',
       version: '1.0.0',
-      description: `### Manuale Operativo e Sequenze API per Agenti AI & Copilot
+      description: `### 📥 Download Specifiche & Elenco API
+* 📥 [Scarica specifica Swagger 2.0 (Formato YAML)](/swagger.yaml)
+* 📥 [Scarica specifica Swagger 2.0 (Formato JSON)](/swagger.json)
+* 📥 [Scarica elenco sintetico API (Formato CSV)](/swagger.csv)
+
+### Manuale Operativo e Sequenze API per Agenti AI & Copilot
 
 Benvenuto nella documentazione delle API REST per il sistema **UP Data Check**. Questa suite di servizi consente a componenti esterne, frontend e agenti autonomi (es. Microsoft Copilot Studio) di gestire l'integrità dei dati di produzione, tracciare anomalie, configurare anagrafiche e automatizzare la comunicazione con i process owner.
 
@@ -193,6 +216,84 @@ function getPureSwagger2Spec() {
   }
   return swagger2;
 }
+
+function jsonToYaml(obj, indent = 0) {
+  const spaces = ' '.repeat(indent);
+  if (obj === null) return 'null';
+  if (typeof obj === 'undefined') return '';
+  if (typeof obj !== 'object') {
+    if (typeof obj === 'string') {
+      if (obj.includes('\n') || obj.includes(':') || obj.includes('#') || obj.includes('-') || obj.includes('"')) {
+        return `"${obj.replace(/"/g, '\\"')}"`;
+      }
+      return obj;
+    }
+    return String(obj);
+  }
+  if (Array.isArray(obj)) {
+    if (obj.length === 0) return '[]';
+    return obj.map(item => {
+      if (typeof item === 'object' && item !== null) {
+        const childYaml = jsonToYaml(item, indent + 2);
+        return `${spaces}- ${childYaml.trimStart()}`;
+      }
+      return `${spaces}- ${jsonToYaml(item, indent + 2)}`;
+    }).join('\n');
+  }
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return '{}';
+  return keys.map(key => {
+    const val = obj[key];
+    if (typeof val === 'object' && val !== null) {
+      return `${spaces}${key}:\n${jsonToYaml(val, indent + 2)}`;
+    }
+    return `${spaces}${key}: ${jsonToYaml(val, indent + 2)}`;
+  }).join('\n');
+}
+
+// Endpoint to serve YAML specification
+app.get('/swagger.yaml', (req, res) => {
+  res.setHeader('Content-Type', 'text/yaml');
+  res.setHeader('Content-Disposition', 'attachment; filename="swagger.yaml"');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const spec = getPureSwagger2Spec();
+  res.send(jsonToYaml(spec));
+});
+
+// Endpoint to serve CSV summary of API
+app.get('/swagger.csv', (req, res) => {
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="swagger.csv"');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const spec = getPureSwagger2Spec();
+  const rows = [['Method', 'Path', 'Summary', 'Description', 'OperationId']];
+  
+  for (const [pathKey, pathObj] of Object.entries(spec.paths)) {
+    for (const [method, op] of Object.entries(pathObj)) {
+      const summary = op.summary || '';
+      const desc = op.description || '';
+      const opId = op.operationId || '';
+      
+      const clean = (val) => {
+        const str = String(val).replace(/"/g, '""');
+        if (str.includes(',') || str.includes('\n') || str.includes('"')) {
+          return `"${str}"`;
+        }
+        return str;
+      };
+      
+      rows.push([
+        method.toUpperCase(),
+        pathKey,
+        clean(summary),
+        clean(desc),
+        clean(opId)
+      ]);
+    }
+  }
+  
+  res.send(rows.map(r => r.join(',')).join('\n'));
+});
 
 // Endpoint Swagger 2.0 (Pura ed al 100% compatibile con Copilot Studio & Power Platform)
 app.get('/swagger.json', (req, res) => {
@@ -548,7 +649,16 @@ app.get('/api/db/observations/bulk', async (req, res) => {
       return res.status(400).json({ error: 'Missing required parameters startDate or endDate.' });
     }
     const data = await dbService.getObservationsBulk(startDate, endDate);
-    res.json(data);
+    const registry = await dbService.getRegistry();
+    const idToNameMap = {};
+    registry.forEach(up => {
+      idToNameMap[up.id] = up.name;
+    });
+    const mappedData = data.map(obs => ({
+      ...obs,
+      up_id: idToNameMap[obs.up_id] || obs.up_id
+    }));
+    res.json(mappedData);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -586,7 +696,16 @@ app.post('/api/db/observations', async (req, res) => {
 app.get('/api/db/outages/bulk', async (req, res) => {
   try {
     const outages = await dbService.getOutagesBulk();
-    res.json({ outages });
+    const registry = await dbService.getRegistry();
+    const idToNameMap = {};
+    registry.forEach(up => {
+      idToNameMap[up.id] = up.name;
+    });
+    const mappedOutages = outages.map(out => ({
+      ...out,
+      up_id: idToNameMap[out.up_id] || out.up_id
+    }));
+    res.json({ outages: mappedOutages });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -691,8 +810,6 @@ app.get('/api/sync/status', requireGoogleAuth, (req, res) => {
  *               items:
  *                 type: object
  *                 properties:
- *                   id:
- *                     type: string
  *                   name:
  *                     type: string
  *                   tech:
@@ -713,7 +830,6 @@ app.get('/api/registry', async (req, res) => {
     const registry = await dbService.getRegistry();
     // Map database fields to frontend structure (e.g. scada_disabled 1/0 to true/false)
     const formatted = registry.map(up => ({
-      id: up.id,
       name: up.name,
       tech: up.tech,
       region: up.region,
@@ -1053,8 +1169,12 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
 
             if (func.name === "getRegistry") {
               endpoint = "/api/agent/registry";
-              const data = await dbService.getRegistry();
-              toolResult = data;
+              const rawData = await dbService.getRegistry();
+              toolResult = rawData.map(up => {
+                const u = { ...up };
+                delete u.id;
+                return u;
+              });
               addTrace(method, endpoint, null, 200, toolResult);
             } else if (func.name === "getLatestCluster") {
               endpoint = "/api/agent/clusters/latest";
@@ -1116,8 +1236,14 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         }
       }
 
+      const cleanTraceUps = (arr) => arr.map(up => {
+        const u = { ...up };
+        delete u.id;
+        return u;
+      });
+
       if (foundUp && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
-        addTrace("GET", "/api/agent/registry", null, 200, ups);
+        addTrace("GET", "/api/agent/registry", null, 200, cleanTraceUps(ups));
         if (foundUp.ppa_partner) {
           answer = `Sì, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) è associata al partner PPA '${foundUp.ppa_partner}'.`;
         } else {
@@ -1129,14 +1255,14 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         const targetUpId = upMatches ? upMatches[1].toUpperCase() : null;
 
         if (targetUpId && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
-          addTrace("GET", "/api/agent/registry", null, 200, ups);
+          addTrace("GET", "/api/agent/registry", null, 200, cleanTraceUps(ups));
           answer = `Non ho trovato alcuna Unità di Produzione corrispondente a '${targetUpId}' nell'anagrafica di sistema.`;
         }
       }
 
       if (!answer) {
         if (msg.includes("lista") || msg.includes("elenco") || msg.includes("registry") || msg.includes("quali up") || msg.includes("unità di produzione")) {
-          addTrace("GET", "/api/agent/registry", null, 200, ups);
+          addTrace("GET", "/api/agent/registry", null, 200, cleanTraceUps(ups));
           answer = `Ecco l'elenco delle ${ups.length} Unità di Produzione (UP) attive configurate a sistema. Ad esempio: ${ups.slice(0, 3).map(u => `${u.id} (${u.name})`).join(", ")}...`;
         } 
         else if (msg.includes("ultimo cluster") || msg.includes("ultimo ticket") || msg.includes("ultima anomalia") || msg.includes("cluster attivi") || msg.includes("stato anomalie")) {

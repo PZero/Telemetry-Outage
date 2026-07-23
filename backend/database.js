@@ -657,5 +657,11 @@ export const dbService = {
   async deleteUP(id) {
     await dbRun('DELETE FROM registry WHERE id = $1', [id]);
     return true;
+  },
+
+  async resolveDbId(upIdOrName) {
+    if (!upIdOrName) return null;
+    const row = await dbGet('SELECT id FROM registry WHERE id = $1 OR name = $1', [upIdOrName]);
+    return row ? row.id : upIdOrName;
   }
 };
