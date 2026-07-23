@@ -1193,7 +1193,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           }
         ];
 
-        const geminiModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash-latest';
+        const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
         const response = await fetch(geminiUrl, {
           method: 'POST',
