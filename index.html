@@ -165,6 +165,9 @@
           <button id="nav-settings-btn" onclick="window.navigateToView ? window.navigateToView('settings') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%;">
             <span>&#x2699;&#xFE0F;</span> <span class="sidebar-hide-on-collapse">Configurazione</span>
           </button>
+          <button id="nav-handover-btn" onclick="window.navigateToView ? window.navigateToView('handover') : null" class="sidebar-tab-btn" style="padding: 10px 14px; font-size: 0.76rem; font-weight: 600; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; text-align: left; width: 100%; display: none;">
+            <span>🤖</span> <span class="sidebar-hide-on-collapse">SI Handover</span>
+          </button>
         </nav>
       </div>
 
@@ -1075,6 +1078,106 @@ Attiva un'acquisizione storica per visualizzare il registro delle richieste sequ
         </div>
       </div>
 
+      </section>
+
+      <!-- VIEW 8: SI HANDOVER & PLAYGROUND -->
+      <section id="handover-view" class="view-panel hidden" style="padding: 24px; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; gap: 20px;">
+        <div class="view-title-bar" style="margin-bottom: 0; display: flex; justify-content: space-between; align-items: center; width: 100%; flex-shrink: 0;">
+          <div>
+            <h2 style="margin: 0; font-size: 1.4rem;">SI Handover & API Playground</h2>
+            <p style="margin: 4px 0 0 0; color: var(--text-muted); font-size: 0.75rem;">Documentazione dei flussi conversazionali per i System Integrator e console interattiva di collaudo delle API.</p>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 20px; flex-grow: 1; min-height: 0;">
+          <!-- Left Column: Guidelines & Flows -->
+          <div class="app-card" style="flex: 1; padding: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto;">
+            <h3 style="margin: 0; font-size: 1rem; color: #3b82f6; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">Guida ai Flussi Conversazionali degli Agenti</h3>
+            
+            <div style="display: flex; flex-direction: column; gap: 14px;">
+              <div>
+                <strong style="color: var(--text-main); font-size: 0.85rem; display: block; margin-bottom: 4px;">Agente 1: Anomaly Scanner (Scansione Automatica)</strong>
+                <p style="margin: 0; font-size: 0.76rem; color: var(--text-muted); line-height: 1.4;">
+                  Esegue il monitoraggio della flotta. Interroga il backend per verificare se ci sono nuovi cluster aperti e ingaggia la chat su Teams.
+                </p>
+                <div style="margin-top: 6px; padding: 6px 10px; background: rgba(59,130,246,0.05); border-left: 3px solid #3b82f6; font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-main);">
+                  GET /api/agent/clusters/latest<br>
+                  POST /api/agent/registry/sync-range (On-demand sync)
+                </div>
+              </div>
+
+              <div>
+                <strong style="color: var(--text-main); font-size: 0.85rem; display: block; margin-bottom: 4px;">Agente 2: Case Manager (Gestione Chat & Sospensioni)</strong>
+                <p style="margin: 0; font-size: 0.76rem; color: var(--text-muted); line-height: 1.4;">
+                  Gestisce il ciclo di vita della chat. Salva il thread ID di Teams nel backend e gestisce sospensioni/riattivazioni temporanee del cluster.
+                </p>
+                <div style="margin-top: 6px; padding: 6px 10px; background: rgba(16,185,129,0.05); border-left: 3px solid #10b981; font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-main);">
+                  POST /api/agent/clusters/:id/chat-context<br>
+                  POST /api/agent/clusters/:id/suspend<br>
+                  POST /api/agent/clusters/:id/reactivate<br>
+                  POST /api/agent/clusters/:id/close
+                </div>
+              </div>
+
+              <div>
+                <strong style="color: var(--text-main); font-size: 0.85rem; display: block; margin-bottom: 4px;">Agente 3: Diagnostic Tester (Verifiche Tecniche)</strong>
+                <p style="margin: 0; font-size: 0.76rem; color: var(--text-muted); line-height: 1.4;">
+                  Esegue test di diagnostica su richiesta dell'utente ed esporta audit report.
+                </p>
+                <div style="margin-top: 6px; padding: 6px 10px; background: rgba(139,92,246,0.05); border-left: 3px solid #8b5cf6; font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-main);">
+                  POST /api/agent/diagnostics/test-day<br>
+                  POST /api/agent/reports/audit
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Interactive API Playground -->
+          <div class="app-card" style="flex: 1.2; padding: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto;">
+            <h3 style="margin: 0; font-size: 1rem; color: #10b981; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">Playground di Collaudo API</h3>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                <label style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Autenticazione</label>
+                <select id="playground-auth-select" class="custom-select" style="background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); padding: 6px 10px; font-size: 0.76rem; border-radius: 6px; outline: none; cursor: pointer;">
+                  <option value="mock">Bypass / Developer Mock Token</option>
+                  <option value="user">Sessione Utente Attuale</option>
+                </select>
+              </div>
+
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                <label style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Seleziona API</label>
+                <select id="playground-api-select" class="custom-select" style="background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); padding: 6px 10px; font-size: 0.76rem; border-radius: 6px; outline: none; cursor: pointer;">
+                  <option value="get_latest_cluster">GET /api/agent/clusters/latest</option>
+                  <option value="get_registry">GET /api/agent/registry</option>
+                  <option value="set_chat_context">POST /api/agent/clusters/15/chat-context</option>
+                  <option value="suspend_cluster">POST /api/agent/clusters/15/suspend</option>
+                  <option value="reactivate_cluster">POST /api/agent/clusters/15/reactivate</option>
+                  <option value="close_cluster">POST /api/agent/clusters/15/close</option>
+                  <option value="run_diagnostics">POST /api/agent/diagnostics/test-day</option>
+                </select>
+              </div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 4px; flex-grow: 1; min-height: 0;">
+              <label style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Request Body (JSON)</label>
+              <textarea id="playground-request-body" class="console-pre" style="flex-grow: 1; background: #0b0f19; border: 1px solid var(--panel-border); color: var(--text-main); font-family: var(--font-mono); font-size: 0.75rem; padding: 10px; border-radius: 6px; outline: none; resize: none; min-height: 120px;"></textarea>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span id="playground-endpoint-label" style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted);">GET /api/agent/clusters/latest</span>
+              <button id="playground-send-btn" class="btn btn-primary" style="font-size: 0.8rem; padding: 6px 16px; background: #10b981; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">Invia Test API</button>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 4px; flex-grow: 1; min-height: 0;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <label style="font-size: 0.65rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Risposta del Server</label>
+                <span id="playground-status-badge" style="font-size: 0.65rem; font-weight: 700; padding: 2px 6px; border-radius: 4px; display: none;">-</span>
+              </div>
+              <pre id="playground-response-body" class="console-pre" style="flex-grow: 1; background: #0b0f19; border: 1px solid var(--panel-border); color: var(--text-muted); font-family: var(--font-mono); font-size: 0.75rem; padding: 10px; border-radius: 6px; overflow-y: auto; min-height: 120px; margin: 0;">Nessuna richiesta inviata.</pre>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
     </div> <!-- Close main-wrapper -->
