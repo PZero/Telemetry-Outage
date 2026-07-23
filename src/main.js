@@ -3200,63 +3200,85 @@ function initHandoverView() {
       }
     };
 
-    // Download Chat click handler
-    const downloadChatBtn = document.getElementById("handover-download-chat-btn");
-    if (downloadChatBtn) {
-      downloadChatBtn.onclick = () => {
-        if (!chatHistory) return;
-        const bubbles = chatHistory.querySelectorAll("& > div");
-        if (bubbles.length === 0) {
-          alert("Nessun messaggio presente nella chat da scaricare.");
-          return;
-        }
+    // Dual Chat Export handlers (Simple vs Full with API Trace)
+    const exportChat = (includeTrace = false) => {
+      if (!chatHistory) return;
+      const bubbles = chatHistory.querySelectorAll("& > div");
+      if (bubbles.length === 0) {
+        alert("Nessun messaggio presente nella chat da scaricare.");
+        return;
+      }
 
-        const now = new Date();
-        const dateStr = now.toISOString().replace("T", " ").substring(0, 19);
-        let exportText = `======================================================================\n`;
-        exportText += ` CRONOLOGIA CHAT SIMULATORE AGENTE (GEMINI LLM)\n`;
-        exportText += ` Esportato il: ${dateStr}\n`;
-        exportText += `======================================================================\n\n`;
+      const now = new Date();
+      const dateStr = now.toISOString().replace("T", " ").substring(0, 19);
+      let exportText = `======================================================================\n`;
+      exportText += includeTrace 
+        ? ` CRONOLOGIA CHAT COMPLETA CON TRACE API (GEMINI LLM)\n`
+        : ` CRONOLOGIA CHAT SIMULATORE AGENTE (GEMINI LLM)\n`;
+      exportText += ` Esportato il: ${dateStr}\n`;
+      exportText += `======================================================================\n\n`;
 
-        let messageCount = 0;
-        bubbles.forEach((bubble) => {
-          if (bubble.innerText.includes("L'agente sta elaborando...")) return;
+      let messageCount = 0;
+      bubbles.forEach((bubble) => {
+        if (bubble.innerText.includes("L'agente sta elaborando...")) return;
 
-          const isUser = bubble.style.alignSelf === "flex-end";
-          const textContent = bubble.innerText.trim();
+        const isUser = bubble.style.alignSelf === "flex-end";
+        const textContent = bubble.innerText.trim();
 
-          messageCount++;
-          if (isUser) {
-            exportText += `----------------------------------------------------------------------\n`;
-            exportText += `[MSG #${messageCount}] UTENTE:\n`;
-            exportText += `----------------------------------------------------------------------\n`;
-            exportText += `${textContent}\n\n`;
-          } else {
-            exportText += `----------------------------------------------------------------------\n`;
-            exportText += `[MSG #${messageCount}] AGENTE VIRTUALI / GEMINI LLM:\n`;
-            exportText += `----------------------------------------------------------------------\n`;
-            exportText += `${textContent}\n\n`;
+        messageCount++;
+        if (isUser) {
+          exportText += `----------------------------------------------------------------------\n`;
+          exportText += `[MSG #${messageCount}] UTENTE:\n`;
+          exportText += `----------------------------------------------------------------------\n`;
+          exportText += `${textContent}\n\n`;
+        } else {
+          exportText += `----------------------------------------------------------------------\n`;
+          exportText += `[MSG #${messageCount}] AGENTE VIRTUALI / GEMINI LLM:\n`;
+          exportText += `----------------------------------------------------------------------\n`;
+          exportText += `${textContent}\n\n`;
+
+          if (includeTrace && bubble._traceData && Array.isArray(bubble._traceData) && bubble._traceData.length > 0) {
+            exportText += `--- [TRACE API INVOCATE DALL'AGENTE (${bubble._traceData.length})] ---\n`;
+            bubble._traceData.forEach((item, idx) => {
+              exportText += `  [API #${idx + 1}] ${item.method} ${item.endpoint} (Status: ${item.status})\n`;
+              exportText += `  REQUEST PAYLOAD:\n`;
+              exportText += `  ${item.request ? JSON.stringify(item.request, null, 2).replace(/\n/g, "\n  ") : 'None'}\n`;
+              exportText += `  RESPONSE BODY:\n`;
+              exportText += `  ${item.response ? JSON.stringify(item.response, null, 2).replace(/\n/g, "\n  ") : 'None'}\n\n`;
+            });
+            exportText += `----------------------------------------------------------------------\n\n`;
           }
-        });
-
-        if (messageCount === 0) {
-          alert("Nessun messaggio valido da esportare.");
-          return;
         }
+      });
 
-        const fileDate = now.toISOString().split("T")[0];
-        const fileTime = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
-        const fileName = `chat_agente_gemini_${fileDate}_${fileTime}.txt`;
-        const blob = new Blob([exportText], { type: "text/plain;charset=utf-8" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      };
+      if (messageCount === 0) {
+        alert("Nessun messaggio valido da esportare.");
+        return;
+      }
+
+      const fileDate = now.toISOString().split("T")[0];
+      const fileTime = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+      const prefix = includeTrace ? 'chat_agente_completa_trace' : 'chat_agente_semplice';
+      const fileName = `${prefix}_${fileDate}_${fileTime}.txt`;
+      const blob = new Blob([exportText], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+    const downloadChatSimpleBtn = document.getElementById("handover-download-chat-simple-btn");
+    if (downloadChatSimpleBtn) {
+      downloadChatSimpleBtn.onclick = () => exportChat(false);
+    }
+
+    const downloadChatFullBtn = document.getElementById("handover-download-chat-full-btn");
+    if (downloadChatFullBtn) {
+      downloadChatFullBtn.onclick = () => exportChat(true);
     }
 
     // Chat clear logs click
@@ -3341,6 +3363,7 @@ function initHandoverView() {
 
         if (response.ok) {
           const data = await response.json();
+          botBubble._traceData = data.trace || [];
           let botHtml = data.answer || "Risposta vuota dal server.";
           if (data.engine) {
             const isLive = data.engine.includes("Live LLM");
