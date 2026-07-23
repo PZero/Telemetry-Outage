@@ -206,6 +206,13 @@ async function initializeTables() {
       console.log('[PG Migration] "chat_platform" column already exists or failed to add:', e.message);
     }
 
+    // Clean up test/orphan clusters not belonging to active registry
+    try {
+      await dbRun(`DELETE FROM clusters WHERE up_id LIKE 'UP_TEST%' OR up_id NOT IN (SELECT id FROM registry)`);
+    } catch (e) {
+      console.log('[PG Cleanup] Test cluster cleanup error:', e.message);
+    }
+
     // 7. Cluster Messages Table
     await dbRun(`
       CREATE TABLE IF NOT EXISTS cluster_messages (
@@ -617,22 +624,26 @@ export const dbService = {
   // --- CLUSTERS & MESSAGES METHODS ---
   async getClusters(status, upId, type) {
     await this.checkAndReactivateSuspendedClusters();
-    let sql = 'SELECT * FROM clusters WHERE 1=1';
+    let sql = `
+      SELECT c.* FROM clusters c
+      JOIN registry r ON LOWER(c.up_id) = LOWER(r.id)
+      WHERE 1=1
+    `;
     const params = [];
     let paramIdx = 1;
     if (status) {
-      sql += ` AND status = $${paramIdx++}`;
+      sql += ` AND c.status = $${paramIdx++}`;
       params.push(status);
     }
     if (upId) {
-      sql += ` AND up_id = $${paramIdx++}`;
+      sql += ` AND LOWER(c.up_id) = LOWER($${paramIdx++})`;
       params.push(upId);
     }
     if (type) {
-      sql += ` AND type = $${paramIdx++}`;
+      sql += ` AND c.type = $${paramIdx++}`;
       params.push(type);
     }
-    sql += ' ORDER BY start_date DESC, created_at DESC';
+    sql += ' ORDER BY c.start_date DESC, c.created_at DESC';
     return await dbAll(sql, params);
   },
 
@@ -715,18 +726,22 @@ export const dbService = {
 
   async getLatestOpenCluster(upId, type) {
     await this.checkAndReactivateSuspendedClusters();
-    let sql = "SELECT * FROM clusters WHERE status IN ('open', 'suspended')";
+    let sql = `
+      SELECT c.* FROM clusters c
+      JOIN registry r ON LOWER(c.up_id) = LOWER(r.id)
+      WHERE c.status IN ('open', 'suspended')
+    `;
     const params = [];
     let paramIdx = 1;
     if (upId) {
-      sql += ` AND up_id = $${paramIdx++}`;
+      sql += ` AND LOWER(c.up_id) = LOWER($${paramIdx++})`;
       params.push(upId);
     }
     if (type) {
-      sql += ` AND type = $${paramIdx++}`;
+      sql += ` AND c.type = $${paramIdx++}`;
       params.push(type);
     }
-    sql += " ORDER BY start_date DESC, created_at DESC LIMIT 1";
+    sql += ' ORDER BY c.start_date DESC, c.created_at DESC LIMIT 1';
     const row = await dbGet(sql, params);
     return row || null;
   },
