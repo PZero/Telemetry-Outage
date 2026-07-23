@@ -364,6 +364,8 @@ function analyzeStreamGaps(values, stepsCount = 96, isSolarShutdown = false) {
   };
 }
 
+let lastAutoSyncTimestamp = 0;
+
 export const dbService = {
   async getObservations(upId, date, type) {
     const row = await dbGet(
@@ -677,21 +679,57 @@ export const dbService = {
 
   async autoSyncDatabaseAnomalies() {
     try {
+      const nowTs = Date.now();
+      if (nowTs - lastAutoSyncTimestamp < 30000) {
+        return; // Throttle: auto-sync executed less than 30 seconds ago
+      }
+      lastAutoSyncTimestamp = nowTs;
+
       const ups = await this.getRegistry();
       if (!ups || ups.length === 0) return;
 
-      const dateRows = await dbAll("SELECT DISTINCT date FROM observations ORDER BY date DESC LIMIT 7");
-      if (!dateRows || dateRows.length === 0) return;
+      // Single query for open clusters to build set of existing open cluster UP IDs
+      const openClusterRows = await dbAll("SELECT up_id FROM clusters WHERE status IN ('open', 'suspended')");
+      const openClustersSet = new Set((openClusterRows || []).map(r => (r.up_id || '').toLowerCase()));
 
-      const dates = dateRows.map(r => r.date);
+      // Filter UPs that don't have an open cluster yet
+      const upsNeedingCheck = ups.filter(up => {
+        const nameKey = (up.name || '').toLowerCase();
+        const idKey = (up.id || '').toLowerCase();
+        return !openClustersSet.has(nameKey) && !openClustersSet.has(idKey);
+      });
 
-      for (const up of ups) {
+      if (upsNeedingCheck.length === 0) return;
+
+      // Bulk query observation data for recent dates in 1 single query
+      const obsRows = await dbAll("SELECT up_id, date, type, values_json FROM observations ORDER BY date DESC LIMIT 400");
+      if (!obsRows || obsRows.length === 0) return;
+
+      const obsMap = new Map();
+      obsRows.forEach(row => {
+        const key = `${(row.up_id || '').toLowerCase()}|${row.date}|${row.type}`;
+        try {
+          obsMap.set(key, JSON.parse(row.values_json));
+        } catch (e) {}
+      });
+
+      // Get list of unique dates present in obsRows
+      const dates = [...new Set(obsRows.map(r => r.date))].slice(0, 5);
+
+      for (const up of upsNeedingCheck) {
+        const upName = up.name || up.id;
+        const upKeys = [(up.id || '').toLowerCase(), (up.name || '').toLowerCase()];
         const isSolarShutdown = (up.tech === 'Solar' && (up.solar_shutdown === 1 || up.solar_shutdown === true));
         const scadaDisabled = (up.scada_disabled === 1 || up.scada_disabled === true);
 
         for (const targetDate of dates) {
-          const m = await this.getObservations(up.id, targetDate, 'meter');
-          const s = await this.getObservations(up.id, targetDate, 'scada');
+          let m = null;
+          let s = null;
+
+          for (const k of upKeys) {
+            if (!m) m = obsMap.get(`${k}|${targetDate}|meter`);
+            if (!s) s = obsMap.get(`${k}|${targetDate}|scada`);
+          }
 
           const stepsMeter = m ? m.length : 96;
           const stepsScada = s ? s.length : (up.tech === 'Wind' ? 144 : 96);
@@ -713,20 +751,14 @@ export const dbService = {
           }
 
           if (anomalyType) {
-            const upName = up.name || up.id;
-            const existing = await dbGet(
-              "SELECT id FROM clusters WHERE (LOWER(up_id) = LOWER($1) OR LOWER(up_id) = LOWER($2)) AND status IN ('open', 'suspended')",
-              [upName, up.id]
+            await this.createCluster(
+              upName,
+              anomalyType,
+              targetDate,
+              targetDate,
+              `Anomalia di telemetria ${anomalyType.toUpperCase()} rilevata dall'audit del DB per il giorno ${targetDate}.`
             );
-            if (!existing) {
-              await this.createCluster(
-                upName,
-                anomalyType,
-                targetDate,
-                targetDate,
-                `Anomalia di telemetria ${anomalyType.toUpperCase()} rilevata automaticamente dall'audit del DB per il giorno ${targetDate}.`
-              );
-            }
+            break;
           }
         }
       }
