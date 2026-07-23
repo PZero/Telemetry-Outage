@@ -800,6 +800,23 @@ app.get('/api/sync/status', requireGoogleAuth, (req, res) => {
  *     operationId: getRegistry
  *     summary: Ottiene l'elenco di tutte le Unita di Produzione (UP)
  *     description: Ritorna la lista completa di tutte le UP della flotta con i relativi attributi (tecnologia, capacita, flag disabilitazione scada, spegnimento notturno, ecc.).
+ *     parameters:
+ *       - in: query
+ *         name: name
+ *         schema:
+ *           type: string
+ *         description: Filtra per nome o codice UP (ricerca parziale)
+ *       - in: query
+ *         name: ppa_partner
+ *         schema:
+ *           type: string
+ *         description: Filtra per partner commerciale PPA
+ *       - in: query
+ *         name: tech
+ *         schema:
+ *           type: string
+ *           enum: [Solar, Wind]
+ *         description: Filtra per tecnologia (Solar/Wind)
  *     responses:
  *       200:
  *         description: Elenco delle UP caricato con successo.
@@ -827,7 +844,8 @@ app.get('/api/sync/status', requireGoogleAuth, (req, res) => {
  */
 app.get('/api/registry', async (req, res) => {
   try {
-    const registry = await dbService.getRegistry();
+    const { name, ppa_partner, tech } = req.query;
+    const registry = await dbService.getRegistry({ name, ppa_partner, tech });
     // Map database fields to frontend structure (e.g. scada_disabled 1/0 to true/false)
     const formatted = registry.map(up => ({
       name: up.name,
@@ -1122,8 +1140,15 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         const functions = [
           {
             name: "getRegistry",
-            description: "Ottiene l'elenco completo di tutte le Unità di Produzione (UP) registrate nel sistema.",
-            parameters: { type: "OBJECT", properties: {} }
+            description: "Ottiene l'elenco delle Unità di Produzione (UP) registrate, con filtri opzionali per nome, partner PPA e tecnologia.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                name: { type: "STRING", description: "Filtro opzionale sul nome o codice dell'UP (es. UP_WIND_01)" },
+                ppa_partner: { type: "STRING", description: "Filtro opzionale sul partner PPA (es. Axpo)" },
+                tech: { type: "STRING", description: "Filtro opzionale sulla tecnologia: Wind o Solar" }
+              }
+            }
           },
           {
             name: "getLatestCluster",
@@ -1169,13 +1194,17 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
 
             if (func.name === "getRegistry") {
               endpoint = "/api/agent/registry";
-              const rawData = await dbService.getRegistry();
+              const rawData = await dbService.getRegistry({
+                name: args.name,
+                ppa_partner: args.ppa_partner,
+                tech: args.tech
+              });
               toolResult = rawData.map(up => {
                 const u = { ...up };
                 delete u.id;
                 return u;
               });
-              addTrace(method, endpoint, null, 200, toolResult);
+              addTrace(method, endpoint, args, 200, toolResult);
             } else if (func.name === "getLatestCluster") {
               endpoint = "/api/agent/clusters/latest";
               const data = await dbService.getLatestOpenCluster();
@@ -1243,7 +1272,8 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
       });
 
       if (foundUp && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
-        addTrace("GET", "/api/agent/registry", null, 200, cleanTraceUps(ups));
+        const filtered = await dbService.getRegistry({ name: foundUp.id });
+        addTrace("GET", "/api/agent/registry", { name: foundUp.id }, 200, cleanTraceUps(filtered));
         if (foundUp.ppa_partner) {
           answer = `Sì, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) è associata al partner PPA '${foundUp.ppa_partner}'.`;
         } else {
@@ -1255,7 +1285,8 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         const targetUpId = upMatches ? upMatches[1].toUpperCase() : null;
 
         if (targetUpId && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
-          addTrace("GET", "/api/agent/registry", null, 200, cleanTraceUps(ups));
+          const filtered = await dbService.getRegistry({ name: targetUpId });
+          addTrace("GET", "/api/agent/registry", { name: targetUpId }, 200, cleanTraceUps(filtered));
           answer = `Non ho trovato alcuna Unità di Produzione corrispondente a '${targetUpId}' nell'anagrafica di sistema.`;
         }
       }

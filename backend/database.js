@@ -378,8 +378,28 @@ export const dbService = {
     return true;
   },
 
-  async getRegistry() {
-    return await dbAll('SELECT * FROM registry');
+  async getRegistry(filters = {}) {
+    let query = 'SELECT * FROM registry WHERE 1=1';
+    const params = [];
+    let paramIndex = 1;
+
+    if (filters.name) {
+      query += ` AND (name LIKE $${paramIndex} OR id LIKE $${paramIndex})`;
+      params.push(`%${filters.name}%`);
+      paramIndex++;
+    }
+    if (filters.ppa_partner) {
+      query += ` AND ppa_partner LIKE $${paramIndex}`;
+      params.push(`%${filters.ppa_partner}%`);
+      paramIndex++;
+    }
+    if (filters.tech) {
+      query += ` AND tech = $${paramIndex}`;
+      params.push(filters.tech);
+      paramIndex++;
+    }
+
+    return await dbAll(query, params);
   },
 
   async saveRegistry(upList) {

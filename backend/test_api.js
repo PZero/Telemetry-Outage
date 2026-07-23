@@ -87,6 +87,28 @@ async function runTests() {
     body: JSON.stringify(upPayload)
   });
 
+  // Test registry query parameters (filtering)
+  const regFilteredByName = await assertAPI('Filtra registro per nome UP', '/api/registry?name=Impianto%20Eolico%20Test%2099', {
+    method: 'GET'
+  });
+  if (regFilteredByName.body.length !== 1 || regFilteredByName.body[0].name !== 'Impianto Eolico Test 99') {
+    console.error('[FAIL] Il filtro name di /api/registry non funziona correttamente. Risposta:', regFilteredByName.body);
+    process.exit(1);
+  } else {
+    console.log('[PASS] Il filtro name di /api/registry funziona correttamente.');
+  }
+
+  const regFilteredByTech = await assertAPI('Filtra registro per tecnologia Wind', '/api/registry?tech=Wind', {
+    method: 'GET'
+  });
+  const hasOnlyWind = regFilteredByTech.body.every(up => up.tech === 'Wind');
+  if (!hasOnlyWind || regFilteredByTech.body.length === 0) {
+    console.error('[FAIL] Il filtro tech di /api/registry non funziona correttamente.');
+    process.exit(1);
+  } else {
+    console.log('[PASS] Il filtro tech di /api/registry funziona correttamente.');
+  }
+
   // List assignments
   const listAss = await assertAPI('Elenca associazioni PPA', '/api/agent/registry/assignments', {
     method: 'GET'
