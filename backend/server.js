@@ -1244,16 +1244,19 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
               const finalData = await finalResponse.json();
               answer = finalData.candidates?.[0]?.content?.parts?.[0]?.text || "Elaborazione completata.";
             } else {
-              throw new Error("Final content generation failed");
+              const errText = await finalResponse.text();
+              throw new Error(`Gemini final call failed with status ${finalResponse.status}: ${errText}`);
             }
           } else {
             answer = part?.text || "Non ho compreso la domanda o non sono necessarie azioni.";
           }
         } else {
-          throw new Error("Gemini request failed");
+          const errText = await response.text();
+          throw new Error(`Gemini first call failed with status ${response.status}: ${errText}`);
         }
       } catch (geminiError) {
         console.warn("[Gemini Chat] Fallback to semantic engine:", geminiError.message);
+        addTrace("ERROR", "/api/agent/chat/gemini-failure", null, 500, { message: geminiError.message });
       }
     }
 
