@@ -1135,7 +1135,30 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
       });
     };
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const rawApiKey = process.env.GEMINI_API_KEY;
+    const apiKey = rawApiKey ? rawApiKey.trim().replace(/^["']|["']$/g, '') : null;
+
+    if (msg.includes("diagnose-gemini-key")) {
+      let debugInfo = "";
+      if (!apiKey) {
+        debugInfo = "Errore: GEMINI_API_KEY non è configurata nelle variabili d'ambiente di Render.";
+      } else {
+        try {
+          const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+          const listRes = await fetch(listUrl);
+          const text = await listRes.text();
+          debugInfo = `ListModels REST Response (status ${listRes.status}):\n${text}`;
+        } catch (err) {
+          debugInfo = `Error querying ListModels: ${err.message}`;
+        }
+      }
+      return res.json({
+        answer: `### Diagnostica Gemini Key\n\n\`\`\`json\n${debugInfo}\n\`\`\``,
+        trace: [],
+        engine: 'Diagnostica'
+      });
+    }
+
     if (apiKey) {
       try {
         const functions = [
@@ -1257,7 +1280,26 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         }
       } catch (geminiError) {
         console.warn("[Gemini Chat] Fallback to semantic engine:", geminiError.message);
-        addTrace("ERROR", "/api/agent/chat/gemini-failure", null, 500, { message: geminiError.message });
+        
+        let modelsInfo = "";
+        try {
+          const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+          const listRes = await fetch(listUrl);
+          if (listRes.ok) {
+            const listData = await listRes.json();
+            const names = (listData.models || []).map(m => m.name.replace('models/', ''));
+            modelsInfo = `Disponibili: ${names.join(', ')}`;
+          } else {
+            modelsInfo = `ListModels fallito con status ${listRes.status}: ${await listRes.text()}`;
+          }
+        } catch (listErr) {
+          modelsInfo = `ListModels error: ${listErr.message}`;
+        }
+
+        addTrace("ERROR", "/api/agent/chat/gemini-failure", null, 500, { 
+          message: geminiError.message,
+          diagnostic: modelsInfo
+        });
       }
     }
 
