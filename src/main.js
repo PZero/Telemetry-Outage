@@ -2999,6 +2999,13 @@ function initHandoverView() {
   const statusBadge = document.getElementById("playground-status-badge");
   const responseBody = document.getElementById("playground-response-body");
 
+  // Chat Simulator & Interceptor elements
+  const chatHistory = document.getElementById("handover-chat-history");
+  const chatInput = document.getElementById("handover-chat-input");
+  const chatSendBtn = document.getElementById("handover-chat-send-btn");
+  const interceptorLogs = document.getElementById("handover-interceptor-logs");
+  const clearLogsBtn = document.getElementById("handover-clear-logs-btn");
+
   if (!apiSelect || !authSelect || !requestBody || !endpointLabel || !sendBtn) return;
 
   const apiTemplates = {
@@ -3058,10 +3065,16 @@ function initHandoverView() {
     }
   };
 
+  const escapeHTML = (str) => {
+    if (!str) return "";
+    return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  };
+
   if (!isHandoverInitialized) {
     isHandoverInitialized = true;
     apiSelect.onchange = updatePlaygroundAPI;
 
+    // Playground manual click
     sendBtn.onclick = async () => {
       const selected = apiSelect.value;
       const template = apiTemplates[selected];
@@ -3132,6 +3145,179 @@ function initHandoverView() {
         sendBtn.innerText = "Invia Test API";
       }
     };
+
+    // Chat clear logs click
+    if (clearLogsBtn) {
+      clearLogsBtn.onclick = () => {
+        if (interceptorLogs) {
+          interceptorLogs.innerHTML = `<div style="font-size: 0.72rem; color: var(--text-muted); font-style: italic; text-align: center; margin-top: 20px;">Nessuna chiamata API intercettata. Fai una domanda in chat per iniziare.</div>`;
+        }
+      };
+    }
+
+    // Chat submit handlers
+    const sendChatMessage = async () => {
+      const text = chatInput.value.trim();
+      if (!text) return;
+
+      // User Bubble
+      const userBubble = document.createElement("div");
+      userBubble.style.alignSelf = "flex-end";
+      userBubble.style.background = "rgba(59, 130, 246, 0.2)";
+      userBubble.style.border = "1px solid rgba(59, 130, 246, 0.4)";
+      userBubble.style.color = "var(--text-main)";
+      userBubble.style.padding = "8px 12px";
+      userBubble.style.borderRadius = "12px 12px 0 12px";
+      userBubble.style.fontSize = "0.75rem";
+      userBubble.style.maxWidth = "85%";
+      userBubble.style.lineHeight = "1.4";
+      userBubble.style.wordBreak = "break-word";
+      userBubble.innerText = text;
+      chatHistory.appendChild(userBubble);
+
+      chatInput.value = "";
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+
+      // Disable inputs
+      chatInput.disabled = true;
+      chatSendBtn.disabled = true;
+
+      // Loader Bubble
+      const loaderBubble = document.createElement("div");
+      loaderBubble.style.alignSelf = "flex-start";
+      loaderBubble.style.background = "rgba(255, 255, 255, 0.05)";
+      loaderBubble.style.border = "1px solid var(--panel-border)";
+      loaderBubble.style.color = "var(--text-muted)";
+      loaderBubble.style.padding = "8px 12px";
+      loaderBubble.style.borderRadius = "12px 12px 12px 0";
+      loaderBubble.style.fontSize = "0.75rem";
+      loaderBubble.style.maxWidth = "85%";
+      loaderBubble.innerText = "L'agente sta elaborando...";
+      chatHistory.appendChild(loaderBubble);
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+
+      try {
+        const headers = {
+          "Content-Type": "application/json"
+        };
+        const curHeaders = getAuthHeaders();
+        if (curHeaders.Authorization) {
+          headers["Authorization"] = curHeaders.Authorization;
+        }
+
+        const apiUrl = import.meta.env.VITE_API_URL || (window.location.hostname === "localhost" ? "http://localhost:3000" : "https://telemetry-outage.onrender.com");
+        const response = await fetch(`${apiUrl}/api/agent/chat`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ message: text })
+        });
+
+        // Remove loader
+        chatHistory.removeChild(loaderBubble);
+
+        const botBubble = document.createElement("div");
+        botBubble.style.alignSelf = "flex-start";
+        botBubble.style.background = "rgba(59, 130, 246, 0.1)";
+        botBubble.style.border = "1px solid rgba(59, 130, 246, 0.2)";
+        botBubble.style.color = "var(--text-main)";
+        botBubble.style.padding = "8px 12px";
+        botBubble.style.borderRadius = "12px 12px 12px 0";
+        botBubble.style.fontSize = "0.75rem";
+        botBubble.style.maxWidth = "85%";
+        botBubble.style.lineHeight = "1.4";
+
+        if (response.ok) {
+          const data = await response.json();
+          botBubble.innerText = data.answer || "Risposta vuota dal server.";
+          chatHistory.appendChild(botBubble);
+
+          // Render trace logs
+          if (data.trace && data.trace.length > 0) {
+            // Check if we need to remove initial placeholder
+            if (interceptorLogs.innerText.includes("Nessuna chiamata API intercettata")) {
+              interceptorLogs.innerHTML = "";
+            }
+
+            data.trace.forEach(item => {
+              const logId = `log-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+              const logCard = document.createElement("div");
+              logCard.style.background = "rgba(15, 23, 42, 0.6)";
+              logCard.style.border = "1px solid var(--panel-border)";
+              logCard.style.borderRadius = "8px";
+              logCard.style.overflow = "hidden";
+              logCard.style.marginBottom = "6px";
+              logCard.style.width = "100%";
+
+              logCard.innerHTML = `
+                <div style="padding: 8px 12px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; user-select: none;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-weight: 700; color: ${item.method === 'POST' ? '#3b82f6' : '#10b981'}; font-family: var(--font-mono);">${item.method}</span>
+                    <span style="color: var(--text-main); font-family: var(--font-mono); font-size: 0.7rem;">${escapeHTML(item.endpoint)}</span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="background: ${item.status === 200 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)'}; color: ${item.status === 200 ? '#34d399' : '#f87171'}; border: 1px solid ${item.status === 200 ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}; font-size: 0.62rem; font-weight: 700; padding: 2px 5px; border-radius: 4px;">
+                      ${item.status}
+                    </span>
+                    <span style="color: var(--text-muted); font-size: 0.65rem;">▼</span>
+                  </div>
+                </div>
+                <div id="${logId}-details" class="hidden" style="padding: 10px; border-top: 1px solid var(--panel-border); background: #070a13; font-family: var(--font-mono); font-size: 0.7rem; display: flex; flex-direction: column; gap: 8px;">
+                  <div>
+                    <div style="color: var(--text-muted); font-weight: 700; font-size: 0.62rem; text-transform: uppercase; margin-bottom: 2px;">Request Payload:</div>
+                    <pre style="margin: 0; background: #0c101f; padding: 6px; border-radius: 4px; color: var(--text-main); overflow-x: auto; max-height: 100px; white-space: pre-wrap; word-break: break-all;">${item.request ? escapeHTML(JSON.stringify(item.request, null, 2)) : 'None'}</pre>
+                  </div>
+                  <div>
+                    <div style="color: var(--text-muted); font-weight: 700; font-size: 0.62rem; text-transform: uppercase; margin-bottom: 2px;">Response Body:</div>
+                    <pre style="margin: 0; background: #0c101f; padding: 6px; border-radius: 4px; color: #94a3b8; overflow-x: auto; max-height: 180px; white-space: pre-wrap; word-break: break-all;">${escapeHTML(JSON.stringify(item.response, null, 2))}</pre>
+                  </div>
+                </div>
+              `;
+
+              // Toggle details collapse
+              logCard.firstElementChild.onclick = () => {
+                const details = logCard.querySelector(`#${logId}-details`);
+                if (details) details.classList.toggle("hidden");
+              };
+
+              interceptorLogs.appendChild(logCard);
+            });
+            interceptorLogs.scrollTop = interceptorLogs.scrollHeight;
+          }
+        } else {
+          botBubble.innerText = `Errore di connessione con l'agente (Stato ${response.status}).`;
+          chatHistory.appendChild(botBubble);
+        }
+      } catch (err) {
+        if (loaderBubble && loaderBubble.parentNode) {
+          chatHistory.removeChild(loaderBubble);
+        }
+        const errBubble = document.createElement("div");
+        errBubble.style.alignSelf = "flex-start";
+        errBubble.style.background = "rgba(239, 68, 68, 0.1)";
+        errBubble.style.border = "1px solid rgba(239, 68, 68, 0.2)";
+        errBubble.style.color = "#f87171";
+        errBubble.style.padding = "8px 12px";
+        errBubble.style.borderRadius = "12px 12px 12px 0";
+        errBubble.style.fontSize = "0.75rem";
+        errBubble.style.maxWidth = "85%";
+        errBubble.innerText = `Errore: ${err.message}`;
+        chatHistory.appendChild(errBubble);
+      } finally {
+        chatInput.disabled = false;
+        chatSendBtn.disabled = false;
+        chatInput.focus();
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+      }
+    };
+
+    if (chatSendBtn) chatSendBtn.onclick = sendChatMessage;
+    if (chatInput) {
+      chatInput.onkeydown = (e) => {
+        if (e.key === "Enter") {
+          sendChatMessage();
+        }
+      };
+    }
   }
 
   updatePlaygroundAPI();

@@ -243,6 +243,42 @@ async function runTests() {
     });
   }
 
+  // --- 3B. AGENT CHAT & INTERCEPTOR TESTS ---
+  console.log('\n--- [3B] Agent Chat Simulator & Interceptor ---');
+  const chatRes = await assertAPI('Chiedi lista delle UP alla chat agent', '/api/agent/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message: 'dammi la lista delle up' })
+  });
+  if (chatRes.ok && chatRes.body && chatRes.body.trace) {
+    const hasRegistryTrace = chatRes.body.trace.some(t => t.endpoint === '/api/agent/registry');
+    if (hasRegistryTrace) {
+      console.log('[PASS] Chat intercetta e logga chiamata a /api/agent/registry.');
+    } else {
+      console.error('[FAIL] Manca la traccia della chiamata API /api/agent/registry nella chat.');
+      process.exit(1);
+    }
+  } else {
+    console.error('[FAIL] Errore risposta chat:', chatRes.body);
+    process.exit(1);
+  }
+
+  const chatDiagRes = await assertAPI('Esegui test diagnostico via chat agent', '/api/agent/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message: 'esegui test diagnostica' })
+  });
+  if (chatDiagRes.ok && chatDiagRes.body && chatDiagRes.body.trace) {
+    const hasDiagTrace = chatDiagRes.body.trace.some(t => t.endpoint === '/api/agent/diagnostics/test-day');
+    if (hasDiagTrace) {
+      console.log('[PASS] Chat intercetta e logga chiamata a /api/agent/diagnostics/test-day.');
+    } else {
+      console.error('[FAIL] Manca la traccia della chiamata diagnostica nella chat.');
+      process.exit(1);
+    }
+  } else {
+    console.error('[FAIL] Errore risposta chat diagnostica:', chatDiagRes.body);
+    process.exit(1);
+  }
+
   // --- 4. TEARDOWN / CLEANUP ---
   console.log('\n--- [4] Ripristino Anagrafiche ---');
   
