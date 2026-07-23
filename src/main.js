@@ -3200,6 +3200,65 @@ function initHandoverView() {
       }
     };
 
+    // Download Chat click handler
+    const downloadChatBtn = document.getElementById("handover-download-chat-btn");
+    if (downloadChatBtn) {
+      downloadChatBtn.onclick = () => {
+        if (!chatHistory) return;
+        const bubbles = chatHistory.querySelectorAll("& > div");
+        if (bubbles.length === 0) {
+          alert("Nessun messaggio presente nella chat da scaricare.");
+          return;
+        }
+
+        const now = new Date();
+        const dateStr = now.toISOString().replace("T", " ").substring(0, 19);
+        let exportText = `======================================================================\n`;
+        exportText += ` CRONOLOGIA CHAT SIMULATORE AGENTE (GEMINI LLM)\n`;
+        exportText += ` Esportato il: ${dateStr}\n`;
+        exportText += `======================================================================\n\n`;
+
+        let messageCount = 0;
+        bubbles.forEach((bubble) => {
+          if (bubble.innerText.includes("L'agente sta elaborando...")) return;
+
+          const isUser = bubble.style.alignSelf === "flex-end";
+          const textContent = bubble.innerText.trim();
+
+          messageCount++;
+          if (isUser) {
+            exportText += `----------------------------------------------------------------------\n`;
+            exportText += `[MSG #${messageCount}] UTENTE:\n`;
+            exportText += `----------------------------------------------------------------------\n`;
+            exportText += `${textContent}\n\n`;
+          } else {
+            exportText += `----------------------------------------------------------------------\n`;
+            exportText += `[MSG #${messageCount}] AGENTE VIRTUALI / GEMINI LLM:\n`;
+            exportText += `----------------------------------------------------------------------\n`;
+            exportText += `${textContent}\n\n`;
+          }
+        });
+
+        if (messageCount === 0) {
+          alert("Nessun messaggio valido da esportare.");
+          return;
+        }
+
+        const fileDate = now.toISOString().split("T")[0];
+        const fileTime = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+        const fileName = `chat_agente_gemini_${fileDate}_${fileTime}.txt`;
+        const blob = new Blob([exportText], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      };
+    }
+
     // Chat clear logs click
     if (clearLogsBtn) {
       clearLogsBtn.onclick = () => {
