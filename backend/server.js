@@ -1284,13 +1284,14 @@ function sanitizeCluster(c) {
           parts: [{
             text: "Sei l'Assistente Virtuale ed Agente AI per il sistema Telemetry-Outage / PZero. Gestisci l'anagrafica delle Unità di Produzione (UP) e il tracciamento delle anomalie e dei cluster di telemetria. " +
                   "REGOLE RIGIDE: NON mostrare MAI l'ID identificativo numerico interno del database (es. Cluster ID 16, ID 17, id: 16) nei messaggi di risposta all'utente né nei riepiloghi. Identifica sempre le anomalie ed i cluster esclusivamente attraverso il codice dell'Unità di Produzione (`up_id`) e la tipologia dell'anomalia.\n\n" +
-                  "IMPORTANTE - STAKEHOLDER E RUOLI NELLA CHAT:\n" +
-                  "Quando fornisci il dettaglio o lo stato di un cluster/anomalia, immagina che nella chat siano presenti 5 ruoli aziendali responsabili. DEVI strutturare la risposta fornendo un veloce recap per ciascun ruolo:\n" +
-                  "- @Responsabile API: Se le chiamate API non sono in errore, indicalo esplicitamente ('Chiamate API prive di errori').\n" +
-                  "- @Responsabile DB: Se sono presenti buchi di dati o anomalie, chiedi di verificare se le procedure di ingestion ed i job di caricamento a database stanno funzionando correttamente.\n" +
-                  "- @Responsabile Origine SCADA: Chiedi di verificare la sorgente della telemetria SCADA ed i sistemi di campo.\n" +
-                  "- @Responsabile Origine METER: Chiedi di verificare la sorgente della misura Meter ed i registri del distributore.\n" +
-                  "- @Responsabile PPA: Se l'impianto è associato a un partner PPA (es. Google, DXT, Axpo), proponi esplicitamente al Responsabile PPA se desidera che tu prepari il testo formale di una comunicazione email da inviare alla controparte per avvisarla dell'anomalia.\n\n" +
+                  "GESTIONE DELLE ANOMALIE E DEGLI STAKEHOLDER:\n" +
+                  "- Quando l'utente chiede di gestire un'anomalia o dice 'gestiamo la prima anomalia', 'dettaglio anomalia', o fa riferimento ad una specifica UP elencata precedentemente (es. 'gestiamo l'anomalia per UPN_S16G1GN_01'), DEVI recuperare i dati dell'impianto/cluster ed effettuare il dettaglio di gestione per quel determinato impianto.\n" +
+                  "- DEVI SEMPRE strutturare la tua risposta fornendo i 5 recap dedicati ai ruoli responsabili presenti in chat:\n" +
+                  "  1. @Responsabile API: Se le chiamate API non sono in errore, indicalo esplicitamente ('Chiamate API esenti da errori (status 200 OK)').\n" +
+                  "  2. @Responsabile DB: Se sono presenti buchi di dati o anomalie, chiedi di verificare se le procedure di ingestion ed i job di caricamento a database stanno funzionando correttamente.\n" +
+                  "  3. @Responsabile Origine SCADA: Chiedi di verificare la sorgente della telemetria SCADA ed i sistemi di campo.\n" +
+                  "  4. @Responsabile Origine METER: Chiedi di verificare la sorgente della misura Meter ed i registri del distributore.\n" +
+                  "  5. @Responsabile PPA: Se l'impianto è associato a un partner PPA (es. Google, DXT, Axpo), proponi esplicitamente al Responsabile PPA se desidera che tu prepari il testo formale di una comunicazione email da inviare alla controparte per avvisarla dell'anomalia. (Se non c'è PPA, indica 'Nessun partner PPA associato').\n\n" +
                   "CHIUSURA CLUSTER (closeCluster):\n" +
                   "Quando chiudi o risolvi un cluster, proponi SEMPRE al Responsabile PPA di redigere il testo della mail da inviare alla controparte PPA per informarla che l'anomalia è rientrata ed i dati sono stati ripristinati.\n\n" +
                   "MAPPATURA TEMPISTICHE:\n" +
@@ -1487,7 +1488,20 @@ function sanitizeCluster(c) {
               // Smart fallback formatting if Gemini text extraction is empty
               if (!answer) {
                 if (func.name === "getRegistry") {
-                  if (Array.isArray(toolResult) && toolResult.length > 0) {
+                  if (Array.isArray(toolResult) && toolResult.length === 1) {
+                    const u = toolResult[0];
+                    const ppaInfo = u.ppa_partner ? ` (Partner PPA: **${u.ppa_partner}**)` : ' (*Nessun PPA*)';
+                    const ppaRecap = u.ppa_partner
+                      ? `@Responsabile PPA: L'impianto ha un contratto PPA attivo con **${u.ppa_partner}**. Desidera che prepari la bozza della mail di notifica da inviare alla controparte per avvisarla dell'anomalia?`
+                      : `@Responsabile PPA: Nessun partner PPA associato per questa Unità di Produzione.`;
+
+                    answer = `Dettaglio ed istruttoria per la gestione dell'anomalia sull'impianto **${u.name}**${ppaInfo}:\n\n` +
+                      `- **@Responsabile API**: Chiamate API prive di errori (status 200 OK).\n` +
+                      `- **@Responsabile DB**: Rilevata anomalia di telemetria a database. Si chiede al Responsabile DB di verificare se le procedure di ingestion ed i job di caricamento stanno funzionando correttamente.\n` +
+                      `- **@Responsabile Origine SCADA**: Richiesta verifica sui concentratori e sistemi di misura di campo SCADA.\n` +
+                      `- **@Responsabile Origine METER**: Misura Meter sotto verifica nei registri di misura.\n` +
+                      `- **${ppaRecap}**`;
+                  } else if (Array.isArray(toolResult) && toolResult.length > 1) {
                     const resolvedPartner = toolResult.ppaResolution?.match || args.ppa_partner;
                     const partnerFilter = resolvedPartner ? ` filtrate per partner PPA '${resolvedPartner}'` : '';
                     answer = `Ecco le Unità di Produzione (UP) trovate${partnerFilter} (${toolResult.length}):\n\n` +
@@ -1507,7 +1521,18 @@ function sanitizeCluster(c) {
                   }
                 } else if (func.name === "getLatestCluster") {
                   if (toolResult && toolResult.up_id) {
-                    answer = `L'ultimo cluster attivo riguarda l'impianto **${toolResult.up_id}** (Tipo: ${toolResult.type}, Stato: ${toolResult.status}).`;
+                    const up = await dbService.getUPById(toolResult.up_id);
+                    const ppaPartner = up?.ppa_partner;
+                    const ppaRecap = ppaPartner
+                      ? `@Responsabile PPA: Contratto PPA attivo con **${ppaPartner}**. Desidera che prepari la bozza di email da inviare alla controparte per notificare l'anomalia?`
+                      : `@Responsabile PPA: Nessun partner PPA associato a questo impianto.`;
+
+                    answer = `Dettaglio per la gestione dell'anomalia sull'impianto **${toolResult.up_id}** (Tipo: ${toolResult.type}, Stato: ${toolResult.status}):\n\n` +
+                      `- **@Responsabile API**: Chiamate API regolarmente eseguite (status 200 OK).\n` +
+                      `- **@Responsabile DB**: Rilevato buco di dati a database. Si richiede al Responsabile DB di verificare l'esecuzione dei job di ingestion.\n` +
+                      `- **@Responsabile Origine SCADA**: Richiesta verifica sui concentratori SCADA di campo.\n` +
+                      `- **@Responsabile Origine METER**: Misura Meter sotto verifica.\n` +
+                      `- **${ppaRecap}**`;
                   } else {
                     answer = "Nessun cluster di anomalie aperto o pendente trovato nel sistema.";
                   }
