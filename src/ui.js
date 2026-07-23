@@ -488,79 +488,91 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
   }
 
   // --- CLUSTER ANOMALY GROUPING RECTANGLES & BADGES OVERLAY ---
-  if (Array.isArray(cachedClustersForHeatmap) && cachedClustersForHeatmap.length > 0) {
-    for (let r = 0; r < numUPs; r++) {
-      const up = upList[r];
-      const upNameKey = (up.name || '').toLowerCase();
-      const upIdKey = (up.id || '').toLowerCase();
-      const y = rowHeight * (r + 1);
+  const dbClusterMap = new Map();
+  if (Array.isArray(cachedClustersForHeatmap)) {
+    cachedClustersForHeatmap.forEach(cl => {
+      const upKey = (cl.up_id || '').toLowerCase();
+      if (!dbClusterMap.has(upKey)) dbClusterMap.set(upKey, []);
+      dbClusterMap.get(upKey).push(cl);
+    });
+  }
 
-      // Filter active/suspended/open clusters for this UP
-      const upClusters = cachedClustersForHeatmap.filter(cl => {
-        const clUpKey = (cl.up_id || '').toLowerCase();
-        return (clUpKey === upNameKey || clUpKey === upIdKey) && (cl.status === 'open' || cl.status === 'suspended');
-      });
+  let globalClusterCounter = 1;
 
-      for (const cl of upClusters) {
-        const clusterIdNum = cl.id || cl.cluster_id || '?';
-        const startStr = (cl.start_date || '').substring(0, 10);
-        const endStr = (cl.end_date || cl.start_date || '').substring(0, 10);
+  for (let r = 0; r < numUPs; r++) {
+    const up = upList[r];
+    const upNameKey = (up.name || '').toLowerCase();
+    const upIdKey = (up.id || '').toLowerCase();
+    const y = rowHeight * (r + 1);
 
-        if (!startStr) continue;
+    const dbClusters = (dbClusterMap.get(upNameKey) || dbClusterMap.get(upIdKey) || []);
 
-        let startCol = -1;
-        let endCol = -1;
+    let blockStart = -1;
 
-        for (let c = 0; c < numDays; c++) {
-          const d = (dateRange[c] || '').substring(0, 10);
-          if (d >= startStr && startCol === -1) startCol = c;
-          if (d <= endStr) endCol = c;
+    for (let c = 0; c <= numDays; c++) {
+      const statusObj = c < numDays ? matrixData[r][c] : null;
+      const status = statusObj ? statusObj.status : null;
+      const isAnomaly = (status === 'red' || status === 'orange');
+
+      if (isAnomaly && blockStart === -1) {
+        blockStart = c;
+      } else if (!isAnomaly && blockStart !== -1) {
+        const blockEnd = c - 1;
+        const startDateStr = (dateRange[blockStart] || '').substring(0, 10);
+        const endDateStr = (dateRange[blockEnd] || '').substring(0, 10);
+
+        let matchingDbCluster = dbClusters.find(cl => {
+          const s = (cl.start_date || '').substring(0, 10);
+          const e = (cl.end_date || cl.start_date || '').substring(0, 10);
+          return (s <= endDateStr && e >= startDateStr);
+        });
+
+        const clusterIdNum = matchingDbCluster ? matchingDbCluster.id : globalClusterCounter++;
+
+        const x1 = labelWidth + blockStart * colWidth;
+        const x2 = labelWidth + (blockEnd + 1) * colWidth;
+        const boxWidth = x2 - x1;
+        const boxHeight = rowHeight;
+
+        // 1. Draw High-Visibility Yellow Bounding Border Rectangle (Outline Only)
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = "#facc15"; // Vibrant Warning Yellow / Gold
+        ctx.strokeRect(x1 + 1.5, y + 1.5, Math.max(colWidth, boxWidth) - 3, boxHeight - 3);
+
+        // 2. Draw Subtle Translucent Yellow Overlay Fill
+        ctx.fillStyle = "rgba(250, 204, 21, 0.18)";
+        ctx.fillRect(x1 + 1.5, y + 1.5, Math.max(colWidth, boxWidth) - 3, boxHeight - 3);
+
+        // 3. Draw Cluster Number Badge Pill inside the box
+        const badgeText = String(clusterIdNum);
+        ctx.font = "bold 9.5px JetBrains Mono, Outfit, sans-serif";
+        const textMetrics = ctx.measureText(badgeText);
+        const pillW = Math.max(16, textMetrics.width + 8);
+        const pillH = 13;
+
+        const cx = x1 + boxWidth / 2;
+        const cy = y + boxHeight / 2;
+
+        // Solid Yellow Pill with Black Border
+        ctx.fillStyle = "#facc15";
+        ctx.strokeStyle = "#000000";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(cx - pillW / 2, cy - pillH / 2, pillW, pillH, 3);
+        } else {
+          ctx.rect(cx - pillW / 2, cy - pillH / 2, pillW, pillH);
         }
+        ctx.fill();
+        ctx.stroke();
 
-        if (startCol !== -1 && endCol !== -1 && startCol <= endCol) {
-          const x1 = labelWidth + startCol * colWidth;
-          const x2 = labelWidth + (endCol + 1) * colWidth;
-          const boxWidth = x2 - x1;
-          const boxHeight = rowHeight;
+        // Black Text (Cluster Number)
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = "#000000";
+        ctx.fillText(badgeText, cx, cy + 0.5);
 
-          // 1. Draw High-Visibility Yellow Bounding Border Rectangle (Outline Only)
-          ctx.lineWidth = 2.5;
-          ctx.strokeStyle = "#facc15"; // Vibrant Warning Yellow
-          ctx.strokeRect(x1 + 1.5, y + 1.5, boxWidth - 3, boxHeight - 3);
-
-          // 2. Draw Translucent Fill Overlay
-          ctx.fillStyle = "rgba(250, 204, 21, 0.15)";
-          ctx.fillRect(x1 + 1.5, y + 1.5, boxWidth - 3, boxHeight - 3);
-
-          // 3. Draw Cluster Number Badge Pill inside the box
-          const badgeText = String(clusterIdNum);
-          ctx.font = "bold 9.5px JetBrains Mono, Outfit, sans-serif";
-          const textMetrics = ctx.measureText(badgeText);
-          const pillW = Math.max(16, textMetrics.width + 8);
-          const pillH = 13;
-
-          const cx = x1 + boxWidth / 2;
-          const cy = y + boxHeight / 2;
-
-          // Solid Yellow Pill with Black Border
-          ctx.fillStyle = "#facc15";
-          ctx.strokeStyle = "#000000";
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          if (typeof ctx.roundRect === 'function') {
-            ctx.roundRect(cx - pillW / 2, cy - pillH / 2, pillW, pillH, 3);
-          } else {
-            ctx.rect(cx - pillW / 2, cy - pillH / 2, pillW, pillH);
-          }
-          ctx.fill();
-          ctx.stroke();
-
-          // Pill Text (Solid Black Cluster Number)
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillStyle = "#000000";
-          ctx.fillText(badgeText, cx, cy + 0.5);
-        }
+        blockStart = -1;
       }
     }
   }
