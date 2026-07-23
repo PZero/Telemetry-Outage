@@ -46,7 +46,7 @@ function chunkArray(array, size) {
   return chunks;
 }
 
-function analyzeStreamGaps(values, stepsCount, isSolarShutdown) {
+export function analyzeStreamGaps(values, stepsCount = 96, isSolarShutdown = false) {
   if (!values) return { isPresent: false, hasGaps: true, gapCount: stepsCount };
   
   let validCount = 0;

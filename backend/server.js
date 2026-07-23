@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { dbService } from './database.js';
 import { enqueueRequest, getQueueStatus } from './queue.js';
 import { requireGoogleAuth, requireAdmin } from './auth.js';
-import { startSync, cancelSync, getSyncStatus, fetchObservationsFromAzureRange, fetchOutagesFromAzureRange } from './sync.js';
+import { startSync, cancelSync, getSyncStatus, fetchObservationsFromAzureRange, fetchOutagesFromAzureRange, analyzeStreamGaps } from './sync.js';
 import swaggerUi from 'swagger-ui-express';
 import swaggerJsdoc from 'swagger-jsdoc';
 
@@ -1340,7 +1340,47 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             } else if (func.name === "runDiagnosticsTestDay") {
               method = "POST";
               endpoint = "/api/agent/diagnostics/test-day";
-              toolResult = { success: true, status: 'green', upId: args.upId, checkedDate: args.targetDate };
+              const targetUpId = args.upId;
+              const targetDate = args.targetDate || new Date().toISOString().split("T")[0];
+              const up = await dbService.getUPById(targetUpId);
+              if (up) {
+                const m = await dbService.getObservations(up.id, targetDate, 'meter');
+                const s = await dbService.getObservations(up.id, targetDate, 'scada');
+                const isSolarShutdown = (up.tech === 'Solar' && (up.solar_shutdown === 1 || up.solar_shutdown === true));
+                const scadaDisabled = (up.scada_disabled === 1 || up.scada_disabled === true);
+                
+                const stepsMeter = m ? m.length : 96;
+                const stepsScada = s ? s.length : (up.tech === 'Wind' ? 144 : 96);
+                
+                const meterAnalysis = analyzeStreamGaps(m, stepsMeter, isSolarShutdown);
+                const scadaAnalysis = scadaDisabled 
+                  ? { isPresent: true, hasGaps: false, gapCount: 0, validCount: stepsScada } 
+                  : analyzeStreamGaps(s, stepsScada, isSolarShutdown);
+
+                let status = 'green';
+                if (!meterAnalysis.isPresent && !scadaAnalysis.isPresent) {
+                  status = 'red';
+                } else if (meterAnalysis.hasGaps || scadaAnalysis.hasGaps) {
+                  status = 'orange';
+                }
+
+                toolResult = {
+                  success: true,
+                  upId: up.id,
+                  upName: up.name,
+                  tech: up.tech,
+                  solar_shutdown: isSolarShutdown,
+                  scada_disabled: scadaDisabled,
+                  checkedDate: targetDate,
+                  meterValid: meterAnalysis.validCount,
+                  scadaValid: scadaAnalysis.validCount,
+                  meterHasGaps: meterAnalysis.hasGaps,
+                  scadaHasGaps: scadaAnalysis.hasGaps,
+                  status
+                };
+              } else {
+                toolResult = { success: false, error: `UP ${targetUpId} not found` };
+              }
               addTrace(method, endpoint, args, 200, toolResult);
             } else if (func.name === "setClusterChatContext") {
               method = "POST";
@@ -1453,6 +1493,13 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
                   answer = `Il **Cluster #${args.clusterId}** è stato chiuso e risolto con successo.`;
                 } else if (func.name === "extendCluster") {
                   answer = `Il **Cluster #${args.clusterId}** è stato esteso con successo fino al **${args.extendToDate}**.`;
+                } else if (func.name === "runDiagnosticsTestDay") {
+                  const statusIcon = toolResult.status === 'green' ? '🟢 Legittimo / Integro' : (toolResult.status === 'orange' ? '🟠 Discrepanza / Buchi' : '🔴 Anomalia Grave');
+                  const solarNote = toolResult.solar_shutdown ? ' (Spegnimento notturno ATTIVO: buchi notturni tollerati)' : '';
+                  answer = `Diagnostica per **${toolResult.upName || toolResult.upId}** (${toolResult.tech}) del **${toolResult.checkedDate}**:\n` +
+                    `- **Stato Integrità**: ${statusIcon}${solarNote}\n` +
+                    `- **Letture Meter**: ${toolResult.meterValid || 0} valide${toolResult.meterHasGaps ? ' (Buchi presenti)' : ''}\n` +
+                    `- **Letture SCADA**: ${toolResult.scada_disabled ? 'Disabilitato' : (toolResult.scadaValid || 0) + ' valide' + (toolResult.scadaHasGaps ? ' (Buchi presenti)' : '')}`;
                 } else {
                   answer = "Elaborazione completata.";
                 }
@@ -2100,22 +2147,34 @@ app.post('/api/agent/diagnostics/test-day', requireGoogleAuth, async (req, res) 
     const meterValues = await dbService.getObservations(upId, date, 'meter');
     const scadaValues = await dbService.getObservations(upId, date, 'scada');
     
-    const countValids = (arr) => {
-      try {
-        return arr ? JSON.parse(arr).filter(v => v !== null && v !== undefined).length : 0;
-      } catch (e) {
-        return 0;
-      }
-    };
-    const meterValids = countValids(meterValues);
-    const scadaValids = countValids(scadaValues);
+    const isSolarShutdown = (up.tech === 'Solar' && (up.solar_shutdown === 1 || up.solar_shutdown === true));
+    const scadaDisabled = (up.scada_disabled === 1 || up.scada_disabled === true);
+
+    const stepsMeter = meterValues ? meterValues.length : 96;
+    const stepsScada = scadaValues ? scadaValues.length : (up.tech === 'Wind' ? 144 : 96);
+
+    const meterAnalysis = analyzeStreamGaps(meterValues, stepsMeter, isSolarShutdown);
+    const scadaAnalysis = scadaDisabled 
+      ? { isPresent: true, hasGaps: false, gapCount: 0, validCount: stepsScada } 
+      : analyzeStreamGaps(scadaValues, stepsScada, isSolarShutdown);
+
+    let status = 'green';
+    if (!meterAnalysis.isPresent && !scadaAnalysis.isPresent) {
+      status = 'red';
+    } else if (meterAnalysis.hasGaps || scadaAnalysis.hasGaps) {
+      status = 'orange';
+    }
     
     res.json({
-      upId,
+      upId: up.id,
+      upName: up.name,
       date,
-      meterValids,
-      scadaValids,
-      status: (meterValids > 0 && (up.scada_disabled || scadaValids > 0)) ? 'green' : 'red'
+      tech: up.tech,
+      solar_shutdown: isSolarShutdown,
+      scada_disabled: scadaDisabled,
+      meterAnalysis,
+      scadaAnalysis,
+      status
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2177,18 +2236,19 @@ app.post('/api/agent/reports/audit', requireGoogleAuth, async (req, res) => {
         const m = await dbService.getObservations(up.id, dStr, 'meter');
         const s = await dbService.getObservations(up.id, dStr, 'scada');
         
-        const countValids = (arr) => {
-          try {
-            return arr ? JSON.parse(arr).filter(v => v !== null && v !== undefined).length : 0;
-          } catch (e) {
-            return 0;
-          }
-        };
-        const mValids = countValids(m);
-        const sValids = countValids(s);
+        const isSolarShutdown = (up.tech === 'Solar' && (up.solar_shutdown === 1 || up.solar_shutdown === true));
+        const scadaDisabled = (up.scada_disabled === 1 || up.scada_disabled === true);
+
+        const stepsMeter = m ? m.length : 96;
+        const stepsScada = s ? s.length : (up.tech === 'Wind' ? 144 : 96);
+
+        const meterAnalysis = analyzeStreamGaps(m, stepsMeter, isSolarShutdown);
+        const scadaAnalysis = scadaDisabled
+          ? { isPresent: true, hasGaps: false }
+          : analyzeStreamGaps(s, stepsScada, isSolarShutdown);
         
-        if (mValids < 96) missingMeter.push(dStr);
-        if (!up.scada_disabled && sValids < 96) missingScada.push(dStr);
+        if (!meterAnalysis.isPresent || meterAnalysis.hasGaps) missingMeter.push(dStr);
+        if (!scadaDisabled && (!scadaAnalysis.isPresent || scadaAnalysis.hasGaps)) missingScada.push(dStr);
       }
       
       if (missingMeter.length > 0 || missingScada.length > 0) {
