@@ -1275,9 +1275,9 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         const filtered = await dbService.getRegistry({ name: foundUp.id });
         addTrace("GET", "/api/agent/registry", { name: foundUp.id }, 200, cleanTraceUps(filtered));
         if (foundUp.ppa_partner) {
-          answer = `Sì, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) è associata al partner PPA '${foundUp.ppa_partner}'.`;
+          answer = `Sì, l'Unità di Produzione ${foundUp.name} è associata al partner PPA '${foundUp.ppa_partner}'.`;
         } else {
-          answer = `No, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) non è attualmente associata ad alcun partner PPA.`;
+          answer = `No, l'Unità di Produzione ${foundUp.name} non è attualmente associata ad alcun partner PPA.`;
         }
       }
       else {
@@ -1294,13 +1294,14 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
       if (!answer) {
         if (msg.includes("lista") || msg.includes("elenco") || msg.includes("registry") || msg.includes("quali up") || msg.includes("unità di produzione")) {
           addTrace("GET", "/api/agent/registry", null, 200, cleanTraceUps(ups));
-          answer = `Ecco l'elenco delle ${ups.length} Unità di Produzione (UP) attive configurate a sistema. Ad esempio: ${ups.slice(0, 3).map(u => `${u.id} (${u.name})`).join(", ")}...`;
+          answer = `Ecco l'elenco delle ${ups.length} Unità di Produzione (UP) attive configurate a sistema. Ad esempio: ${ups.slice(0, 3).map(u => u.name).join(", ")}...`;
         } 
         else if (msg.includes("ultimo cluster") || msg.includes("ultimo ticket") || msg.includes("ultima anomalia") || msg.includes("cluster attivi") || msg.includes("stato anomalie")) {
           const cluster = await dbService.getLatestOpenCluster();
           addTrace("GET", "/api/agent/clusters/latest", null, 200, cluster || { message: "Nessun cluster aperto trovato" });
           if (cluster) {
-            answer = `Ho intercettato il cluster attivo #${cluster.id} relativo all'impianto ${cluster.up_id}. Lo stato attuale è '${cluster.status}' con flag di aggiornamento impostato a ${cluster.force_chat_update}.`;
+            const upName = await dbService.resolveUpName(cluster.up_id);
+            answer = `Ho intercettato il cluster attivo #${cluster.id} relativo all'impianto ${upName}. Lo stato attuale è '${cluster.status}' con flag di aggiornamento impostato a ${cluster.force_chat_update}.`;
           } else {
             answer = "Attualmente non ci sono cluster di anomalie aperti o pendenti nel sistema.";
           }

@@ -683,5 +683,11 @@ export const dbService = {
     if (!upIdOrName) return null;
     const row = await dbGet('SELECT id FROM registry WHERE id = $1 OR name = $1', [upIdOrName]);
     return row ? row.id : upIdOrName;
+  },
+
+  async resolveUpName(dbId) {
+    if (!dbId) return null;
+    const row = await dbGet('SELECT name FROM registry WHERE id = $1', [dbId]);
+    return row ? row.name : dbId;
   }
 };
