@@ -1193,7 +1193,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           }
         ];
 
-        const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+        const geminiModel = process.env.GEMINI_MODEL || 'gemini-flash-latest';
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
         const response = await fetch(geminiUrl, {
           method: 'POST',
@@ -1243,15 +1243,18 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
               addTrace(method, endpoint, args, 200, toolResult);
             }
 
+            // Preserve the full model part (including thoughtSignature required by newer Gemini models)
+            const modelPart = part;
+
             const finalResponse = await fetch(geminiUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 contents: [
                   { role: "user", parts: [{ text: message }] },
-                  { role: "model", parts: [{ functionCall: func }] },
+                  { role: "model", parts: [modelPart] },
                   {
-                    role: "tool",
+                    role: "user",
                     parts: [{
                       functionResponse: {
                         name: func.name,
