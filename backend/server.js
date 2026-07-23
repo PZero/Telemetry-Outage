@@ -1251,7 +1251,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
                   { role: "user", parts: [{ text: message }] },
                   { role: "model", parts: [{ functionCall: func }] },
                   {
-                    role: "function",
+                    role: "tool",
                     parts: [{
                       functionResponse: {
                         name: func.name,
