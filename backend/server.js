@@ -1164,20 +1164,38 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
         const functions = [
           {
             name: "getRegistry",
-            description: "Ottiene l'elenco delle Unità di Produzione (UP) registrate, con filtri opzionali per nome, partner PPA e tecnologia.",
+            description: "Ottiene l'elenco delle Unità di Produzione (UP) registrate nel sistema. Supporta filtri opzionali per partner PPA (es. GOOGLE, DXT, Axpo), nome/codice UP, o tecnologia (Solar/Wind).",
             parameters: {
               type: "OBJECT",
               properties: {
-                name: { type: "STRING", description: "Filtro opzionale sul nome o codice dell'UP (es. UP_WIND_01)" },
-                ppa_partner: { type: "STRING", description: "Filtro opzionale sul partner PPA (es. Axpo)" },
+                name: { type: "STRING", description: "Filtro opzionale sul nome o codice dell'UP (es. UPN_S16N1VL_01, GARNACHA)" },
+                ppa_partner: { type: "STRING", description: "Filtro opzionale sul partner PPA (es. GOOGLE, DXT, Axpo)" },
                 tech: { type: "STRING", description: "Filtro opzionale sulla tecnologia: Wind o Solar" }
               }
             }
           },
           {
+            name: "getClusters",
+            description: "Ottiene la lista di tutti i cluster/anomalie registrati nel sistema. Utile per verificare se ci sono anomalie da gestire o in sospeso.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                status: { type: "STRING", description: "Filtro sullo stato del cluster: 'open', 'suspended', oppure 'closed'" },
+                upId: { type: "STRING", description: "Filtro opzionale sull'identificativo dell'UP" },
+                type: { type: "STRING", description: "Filtro opzionale sulla tipologia dell'anomalia (es. scada, meter, outage)" }
+              }
+            }
+          },
+          {
             name: "getLatestCluster",
-            description: "Ottiene le informazioni sull'ultimo cluster di anomalie aperto o in corso.",
-            parameters: { type: "OBJECT", properties: {} }
+            description: "Ottiene le informazioni sull'ultimo cluster di anomalie aperto o in corso (più recente).",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                upId: { type: "STRING", description: "Filtro opzionale sull'identificativo dell'UP" },
+                type: { type: "STRING", description: "Filtro opzionale sulla tipologia dell'anomalia (es. scada, meter)" }
+              }
+            }
           },
           {
             name: "runDiagnosticsTestDay",
@@ -1185,7 +1203,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             parameters: {
               type: "OBJECT",
               properties: {
-                upId: { type: "STRING", description: "L'identificativo dell'Unità di Produzione (es. UP_WIND_1)" },
+                upId: { type: "STRING", description: "L'identificativo dell'Unità di Produzione (es. UPN_S16N1VL_01)" },
                 targetDate: { type: "STRING", description: "La data in formato YYYY-MM-DD per cui eseguire il test" }
               },
               required: ["upId", "targetDate"]
@@ -1193,12 +1211,22 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           }
         ];
 
+        const systemInstruction = {
+          parts: [{
+            text: "Sei l'Assistente Virtuale ed Agente AI per il sistema Telemetry-Outage / PZero. Gestisci l'anagrafica delle Unità di Produzione (UP) e il tracciamento delle anomalie e dei cluster di telemetria. " +
+                  "IMPORTANTE: Quando l'utente menziona o chiede informazioni su un partner PPA specifico (es. Google, DXT, Axpo, Enel), tecnologia o nome UP, DEVI SEMPRE passare il valore corrispondente nel parametro `ppa_partner`, `tech` o `name` della funzione `getRegistry` (es. `ppa_partner: 'Google'`). NON invocare mai `getRegistry` con parametri vuoti `{}` se l'utente ha menzionato un partner PPA, una tecnologia o una UP specifica. " +
+                  "Quando l'utente chiede se ci sono anomalie da gestire o lo stato generale dei cluster, invoca `getClusters` (con `status: 'open'`) oppure `getLatestCluster`. " +
+                  "Analizza sempre i dati restituiti dai tool e rispondi in modo professionale, completo ed esaustivo in italiano, elencando i risultati rilevanti."
+          }]
+        };
+
         const geminiModel = process.env.GEMINI_MODEL || 'gemini-flash-latest';
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
         const response = await fetch(geminiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            systemInstruction,
             contents: [{ role: "user", parts: [{ text: message }] }],
             tools: [{ functionDeclarations: functions }]
           })
@@ -1225,17 +1253,26 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
                 ppa_partner: args.ppa_partner,
                 tech: args.tech
               });
+              const ppaResolution = rawData.ppaResolution;
               toolResult = rawData.map(up => {
                 const u = { ...up };
                 delete u.id;
                 return u;
               });
+              if (ppaResolution) {
+                toolResult.ppaResolution = ppaResolution;
+              }
+              addTrace(method, endpoint, args, 200, toolResult);
+            } else if (func.name === "getClusters") {
+              endpoint = "/api/agent/clusters";
+              const data = await dbService.getClusters(args.status, args.upId, args.type);
+              toolResult = (data && data.length > 0) ? data : [];
               addTrace(method, endpoint, args, 200, toolResult);
             } else if (func.name === "getLatestCluster") {
               endpoint = "/api/agent/clusters/latest";
-              const data = await dbService.getLatestOpenCluster();
+              const data = await dbService.getLatestOpenCluster(args.upId, args.type);
               toolResult = data || { message: "Nessun cluster aperto trovato" };
-              addTrace(method, endpoint, null, 200, toolResult);
+              addTrace(method, endpoint, args, 200, toolResult);
             } else if (func.name === "runDiagnosticsTestDay") {
               method = "POST";
               endpoint = "/api/agent/diagnostics/test-day";
@@ -1243,13 +1280,13 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
               addTrace(method, endpoint, args, 200, toolResult);
             }
 
-            // Preserve the full model part (including thoughtSignature required by newer Gemini models)
             const modelPart = part;
 
             const finalResponse = await fetch(geminiUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                systemInstruction,
                 contents: [
                   { role: "user", parts: [{ text: message }] },
                   { role: "model", parts: [modelPart] },
@@ -1269,7 +1306,53 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
 
             if (finalResponse.ok) {
               const finalData = await finalResponse.json();
-              answer = finalData.candidates?.[0]?.content?.parts?.[0]?.text || "Elaborazione completata.";
+              const candidate = finalData.candidates?.[0];
+              if (candidate?.content?.parts) {
+                answer = candidate.content.parts
+                  .map(p => p.text)
+                  .filter(Boolean)
+                  .join("\n")
+                  .trim();
+              }
+
+              // Handle PPA ambiguity or notFound override
+              if (toolResult && toolResult.ppaResolution) {
+                if (toolResult.ppaResolution.ambiguous || toolResult.ppaResolution.notFound) {
+                  answer = toolResult.ppaResolution.message;
+                }
+              }
+
+              // Smart fallback formatting if Gemini text extraction is empty
+              if (!answer) {
+                if (func.name === "getRegistry") {
+                  if (Array.isArray(toolResult) && toolResult.length > 0) {
+                    const resolvedPartner = toolResult.ppaResolution?.match || args.ppa_partner;
+                    const partnerFilter = resolvedPartner ? ` filtrate per partner PPA '${resolvedPartner}'` : '';
+                    answer = `Ecco le Unità di Produzione (UP) trovate${partnerFilter} (${toolResult.length}):\n\n` +
+                      "| Nome UP | Tecnologia | Partner PPA | Regione |\n| :--- | :--- | :--- | :--- |\n" +
+                      toolResult.map(u => `| **${u.name}** | ${u.tech} | ${u.ppa_partner || '*Non specificato*'} | ${u.region || 'Italia'} |`).join("\n");
+                  } else if (toolResult?.ppaResolution?.message) {
+                    answer = toolResult.ppaResolution.message;
+                  } else {
+                    answer = args.ppa_partner ? `Nessuna Unità di Produzione trovata associata al partner PPA '${args.ppa_partner}'.` : "Nessuna UP trovata per i criteri specificati.";
+                  }
+                } else if (func.name === "getClusters") {
+                  if (Array.isArray(toolResult) && toolResult.length > 0) {
+                    answer = `Ci sono ${toolResult.length} anomalie/cluster a sistema:\n\n` +
+                      toolResult.map(c => `- **Cluster #${c.id}** su UP **${c.up_id}** (Tipo: ${c.type}, Stato: ${c.status}, Dal: ${c.start_date || 'N/D'})`).join("\n");
+                  } else {
+                    answer = "Attualmente non ci sono anomalie o cluster aperti o da gestire a sistema.";
+                  }
+                } else if (func.name === "getLatestCluster") {
+                  if (toolResult && toolResult.id) {
+                    answer = `L'ultimo cluster attivo è il **Cluster #${toolResult.id}** per l'impianto **${toolResult.up_id}** (Tipo: ${toolResult.type}, Stato: ${toolResult.status}).`;
+                  } else {
+                    answer = "Nessun cluster di anomalie aperto o pendente trovato nel sistema.";
+                  }
+                } else {
+                  answer = "Elaborazione completata.";
+                }
+              }
             } else {
               const errText = await finalResponse.text();
               throw new Error(`Gemini final call failed with status ${finalResponse.status}: ${errText}`);
@@ -1331,6 +1414,17 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           answer = `No, l'Unità di Produzione ${foundUp.name} non è attualmente associata ad alcun partner PPA.`;
         }
       }
+      else if (msg.includes("google") && (msg.includes("ppa") || msg.includes("partner") || msg.includes("quali"))) {
+        const googleUps = await dbService.getRegistry({ ppa_partner: 'GOOGLE' });
+        addTrace("GET", "/api/agent/registry", { ppa_partner: 'GOOGLE' }, 200, cleanTraceUps(googleUps));
+        if (googleUps.length > 0) {
+          answer = `Ecco le Unità di Produzione associate al partner PPA **GOOGLE** (${googleUps.length}):\n\n` +
+            "| Nome UP | Tecnologia | Partner PPA | Regione |\n| :--- | :--- | :--- | :--- |\n" +
+            googleUps.map(u => `| **${u.name}** | ${u.tech} | ${u.ppa_partner} | ${u.region || 'Italia'} |`).join("\n");
+        } else {
+          answer = "Nessuna Unità di Produzione trovata associata al partner PPA GOOGLE.";
+        }
+      }
       else {
         const upMatches = msg.match(/(upn?[-_a-z0-9]+)/i);
         const targetUpId = upMatches ? upMatches[1].toUpperCase() : null;
@@ -1347,12 +1441,16 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           addTrace("GET", "/api/agent/registry", null, 200, cleanTraceUps(ups));
           answer = `Ecco l'elenco delle ${ups.length} Unità di Produzione (UP) attive configurate a sistema. Ad esempio: ${ups.slice(0, 3).map(u => u.name).join(", ")}...`;
         } 
-        else if (msg.includes("ultimo cluster") || msg.includes("ultimo ticket") || msg.includes("ultima anomalia") || msg.includes("cluster attivi") || msg.includes("stato anomalie")) {
-          const cluster = await dbService.getLatestOpenCluster();
-          addTrace("GET", "/api/agent/clusters/latest", null, 200, cluster || { message: "Nessun cluster aperto trovato" });
-          if (cluster) {
-            const upName = await dbService.resolveUpName(cluster.up_id);
-            answer = `Ho intercettato il cluster attivo #${cluster.id} relativo all'impianto ${upName}. Lo stato attuale è '${cluster.status}' con flag di aggiornamento impostato a ${cluster.force_chat_update}.`;
+        else if (msg.includes("anomalie") || msg.includes("ultimo cluster") || msg.includes("ultimo ticket") || msg.includes("ultima anomalia") || msg.includes("cluster attivi") || msg.includes("stato anomalie")) {
+          const openClusters = await dbService.getClusters('open');
+          const latestCluster = await dbService.getLatestOpenCluster();
+          addTrace("GET", "/api/agent/clusters", { status: 'open' }, 200, openClusters.length > 0 ? openClusters : (latestCluster || { message: "Nessun cluster aperto trovato" }));
+          if (openClusters.length > 0) {
+            answer = `Sono presenti ${openClusters.length} anomalie/cluster aperti a sistema:\n\n` +
+              openClusters.map(c => `- **Cluster #${c.id}** (UP: ${c.up_id}, Tipo: ${c.type}, Stato: ${c.status})`).join("\n");
+          } else if (latestCluster) {
+            const upName = await dbService.resolveUpName(latestCluster.up_id);
+            answer = `Ho intercettato il cluster attivo #${latestCluster.id} relativo all'impianto ${upName}. Lo stato attuale è '${latestCluster.status}'.`;
           } else {
             answer = "Attualmente non ci sono cluster di anomalie aperti o pendenti nel sistema.";
           }
@@ -1962,7 +2060,12 @@ app.post('/api/agent/reports/audit', requireGoogleAuth, async (req, res) => {
       const missingScada = [];
       
       const start = new Date(startDate);
-      const end = new Date(endDate);
+      // Never include today in anomaly analysis — today's data is always incomplete
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const effectiveEndDate = endDate > yesterdayStr ? yesterdayStr : endDate;
+      const end = new Date(effectiveEndDate);
       
       for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
         const dStr = d.toISOString().split('T')[0];

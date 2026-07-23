@@ -294,9 +294,25 @@ async function seedDefaultRegistry() {
 // Initialize on startup
 initializeTables();
 
-// ==================================================
-// DATABASE SERVICE METHODS EXPORTS
-// ==================================================
+function levenshtein(a, b) {
+  const an = a ? a.length : 0;
+  const bn = b ? b.length : 0;
+  if (an === 0) return bn;
+  if (bn === 0) return an;
+  const matrix = Array.from({ length: bn + 1 }, (_, i) => [i]);
+  for (let j = 0; j <= an; j++) matrix[0][j] = j;
+  for (let i = 1; i <= bn; i++) {
+    for (let j = 1; j <= an; j++) {
+      const cost = a[j - 1] === b[i - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[bn][an];
+}
 
 export const dbService = {
   async getObservations(upId, date, type) {
@@ -375,7 +391,66 @@ export const dbService = {
         out.reductionPercentage, out.residualCapacity, out.notes
       ]);
     }
-    return true;
+  },
+
+  async getAllPpaPartners() {
+    const ppaTags = await dbAll('SELECT name FROM ppa_tags');
+    const registryPartners = await dbAll("SELECT DISTINCT ppa_partner FROM registry WHERE ppa_partner IS NOT NULL AND ppa_partner != ''");
+    const names = new Set();
+    ppaTags.forEach(t => t.name && names.add(t.name));
+    registryPartners.forEach(r => r.ppa_partner && names.add(r.ppa_partner));
+    return Array.from(names).sort();
+  },
+
+  async resolvePpaPartner(searchTerm) {
+    if (!searchTerm || typeof searchTerm !== 'string') return null;
+    const term = searchTerm.trim().toLowerCase();
+    const allPartners = await this.getAllPpaPartners();
+
+    if (allPartners.length === 0) {
+      return { notFound: true, availablePartners: [], message: 'Nessun partner PPA registrato a sistema.' };
+    }
+
+    // 1. Exact case-insensitive match
+    const exactMatch = allPartners.find(p => p.toLowerCase() === term);
+    if (exactMatch) {
+      return { match: exactMatch, autoCorrected: false };
+    }
+
+    // 2. Substring or prefix matches
+    const substringMatches = allPartners.filter(p => p.toLowerCase().includes(term) || term.includes(p.toLowerCase()));
+    if (substringMatches.length === 1) {
+      return { match: substringMatches[0], autoCorrected: true };
+    } else if (substringMatches.length > 1) {
+      return {
+        ambiguous: true,
+        candidates: substringMatches,
+        message: `Trovati più partner PPA simili per '${searchTerm}': ${substringMatches.join(', ')}. Quale intendevi?`
+      };
+    }
+
+    // 3. Fuzzy matches (Levenshtein distance <= 2)
+    const fuzzyCandidates = allPartners.filter(p => {
+      const dist = levenshtein(term, p.toLowerCase());
+      return dist <= 2 || (term.length >= 3 && p.toLowerCase().startsWith(term.substring(0, 3)));
+    });
+
+    if (fuzzyCandidates.length === 1) {
+      return { match: fuzzyCandidates[0], autoCorrected: true };
+    } else if (fuzzyCandidates.length > 1) {
+      return {
+        ambiguous: true,
+        candidates: fuzzyCandidates,
+        message: `Trovati più partner PPA simili per '${searchTerm}': ${fuzzyCandidates.join(', ')}. Intendevi uno di questi?`
+      };
+    }
+
+    // 4. No matches found
+    return {
+      notFound: true,
+      availablePartners: allPartners,
+      message: `Nessun partner PPA trovato corrispondente a '${searchTerm}'. I partner PPA attualmente registrati a sistema sono: ${allPartners.join(', ')}.`
+    };
   },
 
   async getRegistry(filters = {}) {
@@ -383,23 +458,40 @@ export const dbService = {
     const params = [];
     let paramIndex = 1;
 
-    if (filters.name) {
-      query += ` AND (name LIKE $${paramIndex} OR id LIKE $${paramIndex})`;
-      params.push(`%${filters.name}%`);
-      paramIndex++;
-    }
+    let ppaResolution = null;
     if (filters.ppa_partner) {
-      query += ` AND ppa_partner LIKE $${paramIndex}`;
-      params.push(`%${filters.ppa_partner}%`);
+      ppaResolution = await this.resolvePpaPartner(filters.ppa_partner);
+      if (ppaResolution && ppaResolution.match) {
+        query += ` AND LOWER(ppa_partner) = LOWER($${paramIndex})`;
+        params.push(ppaResolution.match);
+        paramIndex++;
+      } else if (ppaResolution && (ppaResolution.ambiguous || ppaResolution.notFound)) {
+        const emptyRes = [];
+        emptyRes.ppaResolution = ppaResolution;
+        return emptyRes;
+      } else {
+        query += ` AND LOWER(ppa_partner) LIKE $${paramIndex}`;
+        params.push(`%${filters.ppa_partner.toLowerCase()}%`);
+        paramIndex++;
+      }
+    }
+
+    if (filters.name) {
+      query += ` AND (LOWER(name) LIKE $${paramIndex} OR LOWER(id) LIKE $${paramIndex})`;
+      params.push(`%${filters.name.toLowerCase()}%`);
       paramIndex++;
     }
     if (filters.tech) {
-      query += ` AND tech = $${paramIndex}`;
-      params.push(filters.tech);
+      query += ` AND LOWER(tech) = $${paramIndex}`;
+      params.push(filters.tech.toLowerCase());
       paramIndex++;
     }
 
-    return await dbAll(query, params);
+    const rows = await dbAll(query, params);
+    if (ppaResolution) {
+      rows.ppaResolution = ppaResolution;
+    }
+    return rows;
   },
 
   async saveRegistry(upList) {
@@ -623,10 +715,19 @@ export const dbService = {
 
   async getLatestOpenCluster(upId, type) {
     await this.checkAndReactivateSuspendedClusters();
-    const row = await dbGet(
-      "SELECT * FROM clusters WHERE up_id = $1 AND type = $2 AND status IN ('open', 'suspended') ORDER BY start_date DESC, created_at DESC LIMIT 1",
-      [upId, type]
-    );
+    let sql = "SELECT * FROM clusters WHERE status IN ('open', 'suspended')";
+    const params = [];
+    let paramIdx = 1;
+    if (upId) {
+      sql += ` AND up_id = $${paramIdx++}`;
+      params.push(upId);
+    }
+    if (type) {
+      sql += ` AND type = $${paramIdx++}`;
+      params.push(type);
+    }
+    sql += " ORDER BY start_date DESC, created_at DESC LIMIT 1";
+    const row = await dbGet(sql, params);
     return row || null;
   },
 
