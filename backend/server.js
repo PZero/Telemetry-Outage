@@ -1907,11 +1907,23 @@ function sanitizeCluster(c) {
  *       200:
  *         description: Lista di cluster trovati.
  */
-app.get('/api/agent/clusters', requireGoogleAuth, async (req, res) => {
+app.get('/api/clusters', async (req, res) => {
   try {
+    await dbService.autoSyncDatabaseAnomalies();
     const { status, upId, type } = req.query;
     const clusters = await dbService.getClusters(status, upId, type);
-    res.json((clusters || []).map(sanitizeCluster));
+    res.json(clusters || []);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/agent/clusters', async (req, res) => {
+  try {
+    await dbService.autoSyncDatabaseAnomalies();
+    const { status, upId, type } = req.query;
+    const clusters = await dbService.getClusters(status, upId, type);
+    res.json(clusters || []);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

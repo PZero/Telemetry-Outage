@@ -193,9 +193,7 @@ export async function renderFleetHeatmap(canvas, upList, dateRange, onCellClick)
     }
     try {
       const BASE_URL = import.meta.env.VITE_API_URL || (window.location.hostname === "localhost" ? "http://localhost:3000" : "https://telemetry-outage.onrender.com");
-      const res = await fetch(`${BASE_URL}/api/agent/clusters`, {
-        headers: { "Authorization": `Bearer ${localStorage.getItem('google_access_token') || 'local_dev_token'}` }
-      });
+      const res = await fetch(`${BASE_URL}/api/clusters`);
       if (res.ok) {
         cachedClustersForHeatmap = await res.json();
       }
@@ -505,16 +503,18 @@ export function drawHeatmapCached(canvas, upList, dateRange, matrixData, onCellC
 
       for (const cl of upClusters) {
         const clusterIdNum = cl.id || cl.cluster_id || '?';
-        const startDate = cl.start_date;
-        const endDate = cl.end_date || startDate;
+        const startStr = (cl.start_date || '').substring(0, 10);
+        const endStr = (cl.end_date || cl.start_date || '').substring(0, 10);
+
+        if (!startStr) continue;
 
         let startCol = -1;
         let endCol = -1;
 
         for (let c = 0; c < numDays; c++) {
-          const d = dateRange[c];
-          if (d >= startDate && startCol === -1) startCol = c;
-          if (d <= endDate) endCol = c;
+          const d = (dateRange[c] || '').substring(0, 10);
+          if (d >= startStr && startCol === -1) startCol = c;
+          if (d <= endStr) endCol = c;
         }
 
         if (startCol !== -1 && endCol !== -1 && startCol <= endCol) {
