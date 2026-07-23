@@ -1,7 +1,7 @@
 // Telemetry & Outage Integrity PWA Service Worker (sw.js)
 // Handles background processing queue, Azure rate limiting (2s delay), and IndexedDB operations.
 
-const CACHE_NAME = "up-integrity-cache-v137";
+const CACHE_NAME = "up-integrity-cache-v138";
 const ASSETS = [
   "./",
   "./index.html",
