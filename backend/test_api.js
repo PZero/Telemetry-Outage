@@ -279,6 +279,23 @@ async function runTests() {
     process.exit(1);
   }
 
+  const chatPpaRes = await assertAPI('Chiedi associazione PPA di una UP specifica', '/api/agent/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message: "sai dirmi se l'up: UP_TEST_99 è associata ad un ppa?" })
+  });
+  if (chatPpaRes.ok && chatPpaRes.body && chatPpaRes.body.trace) {
+    const hasRegistryTrace = chatPpaRes.body.trace.some(t => t.endpoint === '/api/agent/registry');
+    if (hasRegistryTrace && chatPpaRes.body.answer.includes("Test Partner PPA")) {
+      console.log('[PASS] Chat risponde correttamente sull\'associazione PPA della UP richiesta.');
+    } else {
+      console.error('[FAIL] Risposta chat PPA errata o traccia mancante. Risposta:', chatPpaRes.body.answer);
+      process.exit(1);
+    }
+  } else {
+    console.error('[FAIL] Errore risposta chat PPA:', chatPpaRes.body);
+    process.exit(1);
+  }
+
   // --- 4. TEARDOWN / CLEANUP ---
   console.log('\n--- [4] Ripristino Anagrafiche ---');
   

@@ -1107,7 +1107,24 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
     }
 
     if (!answer) {
-      if (msg.includes("lista") || msg.includes("elenco") || msg.includes("registry") || msg.includes("quali up") || msg.includes("unità di produzione")) {
+      const upMatches = msg.match(/(upn?_[a-z0-9_]+)/i);
+      const targetUpId = upMatches ? upMatches[1].toUpperCase() : null;
+
+      if (targetUpId && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
+        const ups = await dbService.getRegistry();
+        const foundUp = ups.find(u => u.id.toUpperCase() === targetUpId || u.name.toUpperCase().includes(targetUpId));
+        addTrace("GET", "/api/agent/registry", null, 200, ups);
+        if (foundUp) {
+          if (foundUp.ppa_partner) {
+            answer = `Sì, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) è associata al partner PPA '${foundUp.ppa_partner}'.`;
+          } else {
+            answer = `No, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) non è attualmente associata ad alcun partner PPA.`;
+          }
+        } else {
+          answer = `Non ho trovato alcuna Unità di Produzione corrispondente a '${targetUpId}' nell'anagrafica di sistema.`;
+        }
+      }
+      else if (msg.includes("lista") || msg.includes("elenco") || msg.includes("registry") || msg.includes("quali up") || msg.includes("unità di produzione")) {
         const ups = await dbService.getRegistry();
         addTrace("GET", "/api/agent/registry", null, 200, ups);
         answer = `Ecco l'elenco delle ${ups.length} Unità di Produzione (UP) attive configurate a sistema. Ad esempio: ${ups.slice(0, 3).map(u => `${u.id} (${u.name})`).join(", ")}...`;
