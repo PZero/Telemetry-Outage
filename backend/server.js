@@ -1278,9 +1278,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
 
 function sanitizeCluster(c) {
   if (!c) return c;
-  const obj = { ...c };
-  delete obj.id;
-  return obj;
+  return { ...c };
 }
 
         const systemInstruction = {
