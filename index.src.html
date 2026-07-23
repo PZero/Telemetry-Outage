@@ -28,7 +28,7 @@
         alert(`[Loader Error]\nImpossibile caricare lo script: ${event.target.src}\nVerificare se ci sono estensioni che lo bloccano o effettuare un hard refresh.`);
       }
     }, true);
-    window.APP_VERSION = "v126";
+    window.APP_VERSION = "v127";
     // Diagnostic: verify app boots correctly after DOM is ready
     document.addEventListener('DOMContentLoaded', function() {
       setTimeout(function() {
@@ -185,7 +185,7 @@
           <span id="queue-status-desc" class="sidebar-hide-on-collapse" style="font-size: 0.58rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">Caricamento...</span>
         </div>
         <div class="sidebar-hide-on-collapse" style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 2px;">
-          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v126</span>
+          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v127</span>
         </div>
         <!-- Google User profile widget -->
         <div id="user-profile-widget" style="display: none; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); text-align: left;">
@@ -1223,6 +1223,9 @@ Attiva un'acquisizione storica per visualizzare il registro delle richieste sequ
                 </button>
                 <button id="handover-download-chat-full-btn" class="btn btn-secondary" style="font-size: 0.65rem; padding: 3px 8px; background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.3); color: #fbbf24; cursor: pointer; border-radius: 4px; font-weight: 600; display: flex; align-items: center; gap: 4px;" title="Scarica chat con dettagli chiamate API, Request e Response">
                   📊 Chat + Trace API
+                </button>
+                <button id="handover-download-prompt-btn" class="btn btn-secondary" style="font-size: 0.65rem; padding: 3px 8px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; cursor: pointer; border-radius: 4px; font-weight: 600; display: flex; align-items: center; gap: 4px;" title="Scarica le istruzioni di sistema (System Prompt) dell'agente Gemini">
+                  📜 System Prompt
                 </button>
               </div>
             </h3>
