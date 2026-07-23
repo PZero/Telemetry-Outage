@@ -1107,88 +1107,98 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
     }
 
     if (!answer) {
-      const upMatches = msg.match(/(upn?_[a-z0-9_]+)/i);
-      const targetUpId = upMatches ? upMatches[1].toUpperCase() : null;
+      const ups = await dbService.getRegistry();
+      let foundUp = null;
+      for (const up of ups) {
+        if (msg.includes(up.id.toLowerCase()) || (up.name && msg.includes(up.name.toLowerCase()))) {
+          foundUp = up;
+          break;
+        }
+      }
 
-      if (targetUpId && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
-        const ups = await dbService.getRegistry();
-        const foundUp = ups.find(u => u.id.toUpperCase() === targetUpId || u.name.toUpperCase().includes(targetUpId));
+      if (foundUp && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
         addTrace("GET", "/api/agent/registry", null, 200, ups);
-        if (foundUp) {
-          if (foundUp.ppa_partner) {
-            answer = `Sì, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) è associata al partner PPA '${foundUp.ppa_partner}'.`;
-          } else {
-            answer = `No, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) non è attualmente associata ad alcun partner PPA.`;
-          }
+        if (foundUp.ppa_partner) {
+          answer = `Sì, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) è associata al partner PPA '${foundUp.ppa_partner}'.`;
         } else {
+          answer = `No, l'Unità di Produzione ${foundUp.id} (${foundUp.name}) non è attualmente associata ad alcun partner PPA.`;
+        }
+      }
+      else {
+        const upMatches = msg.match(/(upn?[-_a-z0-9]+)/i);
+        const targetUpId = upMatches ? upMatches[1].toUpperCase() : null;
+
+        if (targetUpId && (msg.includes("ppa") || msg.includes("partner") || msg.includes("associata") || msg.includes("info") || msg.includes("dettagli"))) {
+          addTrace("GET", "/api/agent/registry", null, 200, ups);
           answer = `Non ho trovato alcuna Unità di Produzione corrispondente a '${targetUpId}' nell'anagrafica di sistema.`;
         }
       }
-      else if (msg.includes("lista") || msg.includes("elenco") || msg.includes("registry") || msg.includes("quali up") || msg.includes("unità di produzione")) {
-        const ups = await dbService.getRegistry();
-        addTrace("GET", "/api/agent/registry", null, 200, ups);
-        answer = `Ecco l'elenco delle ${ups.length} Unità di Produzione (UP) attive configurate a sistema. Ad esempio: ${ups.slice(0, 3).map(u => `${u.id} (${u.name})`).join(", ")}...`;
-      } 
-      else if (msg.includes("ultimo cluster") || msg.includes("ultimo ticket") || msg.includes("ultima anomalia") || msg.includes("cluster attivi") || msg.includes("stato anomalie")) {
-        const cluster = await dbService.getLatestOpenCluster();
-        addTrace("GET", "/api/agent/clusters/latest", null, 200, cluster || { message: "Nessun cluster aperto trovato" });
-        if (cluster) {
-          answer = `Ho intercettato il cluster attivo #${cluster.id} relativo all'impianto ${cluster.up_id}. Lo stato attuale è '${cluster.status}' con flag di aggiornamento impostato a ${cluster.force_chat_update}.`;
-        } else {
-          answer = "Attualmente non ci sono cluster di anomalie aperti o pendenti nel sistema.";
+
+      if (!answer) {
+        if (msg.includes("lista") || msg.includes("elenco") || msg.includes("registry") || msg.includes("quali up") || msg.includes("unità di produzione")) {
+          addTrace("GET", "/api/agent/registry", null, 200, ups);
+          answer = `Ecco l'elenco delle ${ups.length} Unità di Produzione (UP) attive configurate a sistema. Ad esempio: ${ups.slice(0, 3).map(u => `${u.id} (${u.name})`).join(", ")}...`;
+        } 
+        else if (msg.includes("ultimo cluster") || msg.includes("ultimo ticket") || msg.includes("ultima anomalia") || msg.includes("cluster attivi") || msg.includes("stato anomalie")) {
+          const cluster = await dbService.getLatestOpenCluster();
+          addTrace("GET", "/api/agent/clusters/latest", null, 200, cluster || { message: "Nessun cluster aperto trovato" });
+          if (cluster) {
+            answer = `Ho intercettato il cluster attivo #${cluster.id} relativo all'impianto ${cluster.up_id}. Lo stato attuale è '${cluster.status}' con flag di aggiornamento impostato a ${cluster.force_chat_update}.`;
+          } else {
+            answer = "Attualmente non ci sono cluster di anomalie aperti o pendenti nel sistema.";
+          }
         }
-      }
-      else if (msg.includes("associa chat") || msg.includes("salva chat") || msg.includes("teams")) {
-        const cluster = await dbService.getLatestOpenCluster();
-        if (cluster) {
-          const mockChatId = "19:meeting_Y2ZmYTZhNDgt...-thread.v2";
-          await dbService.setClusterChatContext(cluster.id, mockChatId, 'teams');
-          addTrace("POST", `/api/agent/clusters/${cluster.id}/chat-context`, { external_chat_id: mockChatId, chat_platform: "teams" }, 200, { success: true });
-          answer = `Chat Teams associata con successo al cluster #${cluster.id}. L'agente utilizzerà questo contesto per riprendere la conversazione in futuro.`;
-        } else {
-          answer = "Impossibile associare la chat Teams perché non è stato trovato alcun cluster aperto a cui collegarla.";
+        else if (msg.includes("associa chat") || msg.includes("salva chat") || msg.includes("teams")) {
+          const cluster = await dbService.getLatestOpenCluster();
+          if (cluster) {
+            const mockChatId = "19:meeting_Y2ZmYTZhNDgt...-thread.v2";
+            await dbService.setClusterChatContext(cluster.id, mockChatId, 'teams');
+            addTrace("POST", `/api/agent/clusters/${cluster.id}/chat-context`, { external_chat_id: mockChatId, chat_platform: "teams" }, 200, { success: true });
+            answer = `Chat Teams associata con successo al cluster #${cluster.id}. L'agente utilizzerà questo contesto per riprendere la conversazione in futuro.`;
+          } else {
+            answer = "Impossibile associare la chat Teams perché non è stato trovato alcun cluster aperto a cui collegarla.";
+          }
         }
-      }
-      else if (msg.includes("sospendi") || msg.includes("metti in pausa")) {
-        const cluster = await dbService.getLatestOpenCluster();
-        if (cluster) {
-          const reactDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-          await dbService.suspendCluster(cluster.id, reactDate);
-          addTrace("POST", `/api/agent/clusters/${cluster.id}/suspend`, { reactivation_date: reactDate }, 200, { success: true });
-          answer = `Il cluster #${cluster.id} è stato sospeso con successo fino al ${reactDate}. La riattivazione e i successivi check avverranno in tale data.`;
-        } else {
-          answer = "Impossibile sospendere: nessun cluster aperto trovato nel sistema.";
+        else if (msg.includes("sospendi") || msg.includes("metti in pausa")) {
+          const cluster = await dbService.getLatestOpenCluster();
+          if (cluster) {
+            const reactDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+            await dbService.suspendCluster(cluster.id, reactDate);
+            addTrace("POST", `/api/agent/clusters/${cluster.id}/suspend`, { reactivation_date: reactDate }, 200, { success: true });
+            answer = `Il cluster #${cluster.id} è stato sospeso con successo fino al ${reactDate}. La riattivazione e i successivi check avverranno in tale data.`;
+          } else {
+            answer = "Impossibile sospendere: nessun cluster aperto trovato nel sistema.";
+          }
         }
-      }
-      else if (msg.includes("riattiva") || msg.includes("sveglia")) {
-        const cluster = await dbService.getLatestOpenCluster();
-        if (cluster) {
-          await dbService.reactivateCluster(cluster.id);
-          addTrace("POST", `/api/agent/clusters/${cluster.id}/reactivate`, null, 200, { success: true });
-          answer = `Il cluster #${cluster.id} è stato riattivato con successo. L'agente ha ripreso il monitoraggio attivo del ticket.`;
-        } else {
-          answer = "Nessun cluster da riattivare trovato.";
+        else if (msg.includes("riattiva") || msg.includes("sveglia")) {
+          const cluster = await dbService.getLatestOpenCluster();
+          if (cluster) {
+            await dbService.reactivateCluster(cluster.id);
+            addTrace("POST", `/api/agent/clusters/${cluster.id}/reactivate`, null, 200, { success: true });
+            answer = `Il cluster #${cluster.id} è stato riattivato con successo. L'agente ha ripreso il monitoraggio attivo del ticket.`;
+          } else {
+            answer = "Nessun cluster da riattivare trovato.";
+          }
         }
-      }
-      else if (msg.includes("chiudi") || msg.includes("risolvi")) {
-        const cluster = await dbService.getLatestOpenCluster();
-        if (cluster) {
-          await dbService.closeCluster(cluster.id);
-          addTrace("POST", `/api/agent/clusters/${cluster.id}/close`, null, 200, { success: true });
-          answer = `Il cluster #${cluster.id} è stato chiuso e risolto. L'agente ha salvato lo stato finale a database.`;
-        } else {
-          answer = "Nessun cluster aperto da poter chiudere o risolvere.";
+        else if (msg.includes("chiudi") || msg.includes("risolvi")) {
+          const cluster = await dbService.getLatestOpenCluster();
+          if (cluster) {
+            await dbService.closeCluster(cluster.id);
+            addTrace("POST", `/api/agent/clusters/${cluster.id}/close`, null, 200, { success: true });
+            answer = `Il cluster #${cluster.id} è stato chiuso e risolto. L'agente ha salvato lo stato finale a database.`;
+          } else {
+            answer = "Nessun cluster aperto da poter chiudere o risolvere.";
+          }
         }
-      }
-      else if (msg.includes("test") || msg.includes("diagnostica") || msg.includes("controlla")) {
-        const ups = await dbService.getRegistry();
-        const targetUp = ups[0] ? ups[0].id : "UP_WIND_1";
-        const today = new Date().toISOString().split("T")[0];
-        addTrace("POST", "/api/agent/diagnostics/test-day", { upId: targetUp, targetDate: today }, 200, { success: true, status: 'green' });
-        answer = `Ho eseguito un test diagnostico on-demand per l'impianto ${targetUp} in data ${today}. Tutte le telemetrie SCADA e METER sono in stato verde (100% integro).`;
-      }
-      else {
-        answer = "Sono l'Agente Gemini in modalità handover. Posso aiutarti a collaudare i flussi reali dell'agente. Chiedimi della 'lista delle up', dell' 'ultimo cluster', di 'sospendere' o 'chiudere' un cluster, oppure di 'eseguire un test di diagnostica'!";
+        else if (msg.includes("test") || msg.includes("diagnostica") || msg.includes("controlla")) {
+          const targetUp = ups[0] ? ups[0].id : "UP_WIND_1";
+          const today = new Date().toISOString().split("T")[0];
+          addTrace("POST", "/api/agent/diagnostics/test-day", { upId: targetUp, targetDate: today }, 200, { success: true, status: 'green' });
+          answer = `Ho eseguito un test diagnostico on-demand per l'impianto ${targetUp} in data ${today}. Tutte le telemetrie SCADA e METER sono in stato verde (100% integro).`;
+        }
+        else {
+          answer = "Sono l'Agente Gemini in modalità handover. Posso aiutarti a collaudare i flussi reali dell'agente. Chiedimi della 'lista delle up', dell' 'ultimo cluster', di 'sospendere' o 'chiudere' un cluster, oppure di 'eseguire un test di diagnostica'!";
+        }
       }
     }
 
