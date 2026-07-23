@@ -27,7 +27,7 @@
         alert(`[Loader Error]\nImpossibile caricare lo script: ${event.target.src}\nVerificare se ci sono estensioni che lo bloccano o effettuare un hard refresh.`);
       }
     }, true);
-    window.APP_VERSION = "v122";
+    window.APP_VERSION = "v123";
     // Diagnostic: verify app boots correctly after DOM is ready
     document.addEventListener('DOMContentLoaded', function() {
       setTimeout(function() {
@@ -186,7 +186,7 @@
           <span id="queue-status-desc" class="sidebar-hide-on-collapse" style="font-size: 0.58rem; color: var(--text-muted); margin-top: 2px; line-height: 1.2;">Caricamento...</span>
         </div>
         <div class="sidebar-hide-on-collapse" style="font-size: 0.55rem; color: var(--text-muted); text-align: center; margin-top: 2px;">
-          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v122</span>
+          Build: <span id="app-version-badge" style="font-weight: 600; color: #60a5fa;">v123</span>
         </div>
         <!-- Google User profile widget -->
         <div id="user-profile-widget" style="display: none; align-items: center; gap: 8px; margin-top: 6px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); text-align: left;">
@@ -1109,15 +1109,15 @@ Attiva un'acquisizione storica per visualizzare il registro delle richieste sequ
                 <span>📘</span> Documentazione Swagger API & Download
               </div>
               <div style="display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.72rem;">
-                <a href="/api-docs" target="_blank" style="color: #60a5fa; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                <a href="https://telemetry-outage.onrender.com/api-docs/" target="_blank" style="color: #60a5fa; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
                   🌐 Apri Swagger UI
                 </a>
                 <span style="color: rgba(255,255,255,0.15);">|</span>
-                <a href="/swagger.yaml" target="_blank" style="color: #34d399; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                <a href="https://telemetry-outage.onrender.com/swagger.yaml" target="_blank" style="color: #34d399; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
                   📥 Specifica YAML
                 </a>
                 <span style="color: rgba(255,255,255,0.15);">|</span>
-                <a href="/swagger.csv" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
+                <a href="https://telemetry-outage.onrender.com/swagger.csv" target="_blank" style="color: #fbbf24; text-decoration: none; font-weight: 600; display: flex; align-items: center; gap: 4px;">
                   📥 Elenco CSV
                 </a>
               </div>
@@ -1214,13 +1214,18 @@ Attiva un'acquisizione storica per visualizzare il registro delle richieste sequ
         <div id="handover-panel-chat" class="hidden" style="display: flex; gap: 20px; flex-grow: 1; min-height: 0;">
           <!-- Left Column: Chat Box -->
           <div class="app-card" style="flex: 1; padding: 20px; background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; gap: 12px;">
-            <h3 style="margin: 0; font-size: 1rem; color: #3b82f6; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
+            <h3 style="margin: 0; font-size: 1rem; color: #3b82f6; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
               <div style="display: flex; align-items: center; gap: 6px;">
                 <span>💬</span> Simulatore Conversazione Agente (Gemini LLM)
               </div>
-              <button id="handover-download-chat-btn" class="btn btn-secondary" style="font-size: 0.68rem; padding: 3px 8px; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; cursor: pointer; border-radius: 4px; font-weight: 600; display: flex; align-items: center; gap: 4px;" title="Scarica conversazione in formato testo">
-                📥 Scarica Chat
-              </button>
+              <div style="display: flex; gap: 6px;">
+                <button id="handover-download-chat-simple-btn" class="btn btn-secondary" style="font-size: 0.65rem; padding: 3px 8px; background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa; cursor: pointer; border-radius: 4px; font-weight: 600; display: flex; align-items: center; gap: 4px;" title="Scarica solo testo conversazione">
+                  📄 Chat Semplice
+                </button>
+                <button id="handover-download-chat-full-btn" class="btn btn-secondary" style="font-size: 0.65rem; padding: 3px 8px; background: rgba(251, 191, 36, 0.15); border: 1px solid rgba(251, 191, 36, 0.3); color: #fbbf24; cursor: pointer; border-radius: 4px; font-weight: 600; display: flex; align-items: center; gap: 4px;" title="Scarica chat con dettagli chiamate API, Request e Response">
+                  📊 Chat + Trace API
+                </button>
+              </div>
             </h3>
             <!-- Chat Area -->
             <div id="handover-chat-history" style="flex-grow: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px; background: #0b0f19; border: 1px solid var(--panel-border); border-radius: 8px;">
