@@ -3006,7 +3006,28 @@ function initHandoverView() {
   const interceptorLogs = document.getElementById("handover-interceptor-logs");
   const clearLogsBtn = document.getElementById("handover-clear-logs-btn");
 
+  const tabManual = document.getElementById("handover-tab-manual");
+  const tabChat = document.getElementById("handover-tab-chat");
+  const panelManual = document.getElementById("handover-panel-manual");
+  const panelChat = document.getElementById("handover-panel-chat");
+
   if (!apiSelect || !authSelect || !requestBody || !endpointLabel || !sendBtn) return;
+
+  // Always reset to Manual tab on view activation
+  if (tabManual && tabChat && panelManual && panelChat) {
+    tabManual.classList.add("active");
+    tabManual.style.background = "rgba(59, 130, 246, 0.1)";
+    tabManual.style.borderColor = "rgba(59, 130, 246, 0.2)";
+    tabManual.style.color = "var(--text-main)";
+
+    tabChat.classList.remove("active");
+    tabChat.style.background = "none";
+    tabChat.style.borderColor = "transparent";
+    tabChat.style.color = "var(--text-muted)";
+
+    panelManual.classList.remove("hidden");
+    panelChat.classList.add("hidden");
+  }
 
   const apiTemplates = {
     get_latest_cluster: {
@@ -3073,6 +3094,39 @@ function initHandoverView() {
   if (!isHandoverInitialized) {
     isHandoverInitialized = true;
     apiSelect.onchange = updatePlaygroundAPI;
+
+    // Tabs toggle click triggers
+    if (tabManual && tabChat && panelManual && panelChat) {
+      tabManual.onclick = () => {
+        tabManual.classList.add("active");
+        tabManual.style.background = "rgba(59, 130, 246, 0.1)";
+        tabManual.style.borderColor = "rgba(59, 130, 246, 0.2)";
+        tabManual.style.color = "var(--text-main)";
+
+        tabChat.classList.remove("active");
+        tabChat.style.background = "none";
+        tabChat.style.borderColor = "transparent";
+        tabChat.style.color = "var(--text-muted)";
+
+        panelManual.classList.remove("hidden");
+        panelChat.classList.add("hidden");
+      };
+
+      tabChat.onclick = () => {
+        tabChat.classList.add("active");
+        tabChat.style.background = "rgba(59, 130, 246, 0.1)";
+        tabChat.style.borderColor = "rgba(59, 130, 246, 0.2)";
+        tabChat.style.color = "var(--text-main)";
+
+        tabManual.classList.remove("active");
+        tabManual.style.background = "none";
+        tabManual.style.borderColor = "transparent";
+        tabManual.style.color = "var(--text-muted)";
+
+        panelChat.classList.remove("hidden");
+        panelManual.classList.add("hidden");
+      };
+    }
 
     // Playground manual click
     sendBtn.onclick = async () => {
