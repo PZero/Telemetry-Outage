@@ -206,11 +206,18 @@ async function initializeTables() {
       console.log('[PG Migration] "chat_platform" column already exists or failed to add:', e.message);
     }
 
-    // Clean up test/orphan clusters not belonging to active registry
+    // Clean up test/orphan clusters and map synthetic UP_C_ ids to real UP names
     try {
-      await dbRun(`DELETE FROM clusters WHERE up_id LIKE 'UP_TEST%' OR up_id NOT IN (SELECT id FROM registry)`);
+      await dbRun(`UPDATE registry SET id = name WHERE name IS NOT NULL AND name != '' AND id LIKE 'UP_C_%'`);
+      await dbRun(`
+        UPDATE clusters SET up_id = registry.name
+        FROM registry
+        WHERE (LOWER(clusters.up_id) = LOWER(registry.id) OR clusters.up_id LIKE 'UP_C_%')
+          AND registry.name IS NOT NULL AND registry.name != ''
+      `);
+      await dbRun(`DELETE FROM clusters WHERE up_id LIKE 'UP_C_%' OR up_id LIKE 'UP_TEST%' OR up_id NOT IN (SELECT name FROM registry) AND up_id NOT IN (SELECT id FROM registry)`);
     } catch (e) {
-      console.log('[PG Cleanup] Test cluster cleanup error:', e.message);
+      console.log('[PG Cleanup] UP ID migration warning:', e.message);
     }
 
     // 7. Cluster Messages Table
@@ -540,13 +547,24 @@ export const dbService = {
   async saveRegistry(upList) {
     await dbRun('DELETE FROM registry');
     for (const up of upList) {
+      const upName = up.name || up.id;
       const ppa = up.ppa_partner || up.ppaTag || null;
       const scada = (up.scada_disabled === true || up.scada_disabled === 1) ? 1 : 0;
       const solarShutdown = (up.solar_shutdown === true || up.solar_shutdown === 1) ? 1 : 0;
       await dbRun(`
         INSERT INTO registry (id, name, tech, region, capacity, lat, lon, ppa_partner, scada_disabled, solar_shutdown)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-      `, [up.id, up.name, up.tech, up.region, up.capacity, up.lat, up.lon, ppa, scada, solarShutdown]);
+        ON CONFLICT (id) DO UPDATE SET
+          name = EXCLUDED.name,
+          tech = EXCLUDED.tech,
+          region = EXCLUDED.region,
+          capacity = EXCLUDED.capacity,
+          lat = EXCLUDED.lat,
+          lon = EXCLUDED.lon,
+          ppa_partner = EXCLUDED.ppa_partner,
+          scada_disabled = EXCLUDED.scada_disabled,
+          solar_shutdown = EXCLUDED.solar_shutdown
+      `, [upName, upName, up.tech, up.region, up.capacity, up.lat, up.lon, ppa, scada, solarShutdown]);
     }
     return true;
   },
@@ -695,13 +713,14 @@ export const dbService = {
           }
 
           if (anomalyType) {
+            const upName = up.name || up.id;
             const existing = await dbGet(
-              "SELECT id FROM clusters WHERE LOWER(up_id) = LOWER($1) AND status IN ('open', 'suspended')",
-              [up.id]
+              "SELECT id FROM clusters WHERE (LOWER(up_id) = LOWER($1) OR LOWER(up_id) = LOWER($2)) AND status IN ('open', 'suspended')",
+              [upName, up.id]
             );
             if (!existing) {
               await this.createCluster(
-                up.id,
+                upName,
                 anomalyType,
                 targetDate,
                 targetDate,
@@ -721,8 +740,9 @@ export const dbService = {
     await this.checkAndReactivateSuspendedClusters();
     await this.autoSyncDatabaseAnomalies();
     let sql = `
-      SELECT c.* FROM clusters c
-      JOIN registry r ON LOWER(c.up_id) = LOWER(r.id)
+      SELECT c.id, COALESCE(r.name, c.up_id) AS up_id, c.type, c.start_date, c.end_date, c.status, c.created_at, c.updated_at, c.reactivation_date, c.force_chat_update, c.external_chat_id, c.chat_platform
+      FROM clusters c
+      JOIN registry r ON (LOWER(c.up_id) = LOWER(r.id) OR LOWER(c.up_id) = LOWER(r.name))
       WHERE 1=1
     `;
     const params = [];
@@ -732,7 +752,8 @@ export const dbService = {
       params.push(status);
     }
     if (upId) {
-      sql += ` AND LOWER(c.up_id) = LOWER($${paramIdx++})`;
+      sql += ` AND (LOWER(c.up_id) = LOWER($${paramIdx}) OR LOWER(r.name) = LOWER($${paramIdx}))`;
+      paramIdx++;
       params.push(upId);
     }
     if (type) {

@@ -1449,7 +1449,7 @@ function setupSettingsHandlers() {
           const tech = (parts[1] && parts[1].toLowerCase() === "wind") ? "Wind" : "Solar";
           const region = parts[2] || "Sicilia";
           const capacity = parseFloat(parts[3]) || null;
-          const id = `UP_C_${String(idx + 1).padStart(2, '0')}`;
+          const id = name;
           customList.push({
             id,
             name,
@@ -1467,7 +1467,7 @@ function setupSettingsHandlers() {
           if (lowerName.includes("wind") || lowerName.includes("eolico") || lowerName.includes("pala") || lowerName.includes("vento") || lowerName.includes("turbina")) {
             tech = "Wind";
           }
-          const id = `UP_C_${String(idx + 1).padStart(2, '0')}`;
+          const id = name;
           customList.push({
             id,
             name,
