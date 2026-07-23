@@ -3340,11 +3340,28 @@ function initHandoverView() {
           headers["Authorization"] = curHeaders.Authorization;
         }
 
+        // Collect recent conversation history for multi-turn context
+        const recentHistory = [];
+        const bubbles = chatHistory.querySelectorAll("& > div");
+        bubbles.forEach(b => {
+          if (b.innerText.includes("L'agente sta elaborando...")) return;
+          const isUser = b.style.alignSelf === "flex-end";
+          const rawText = b.innerText.split("\nMotore:")[0].trim();
+          if (rawText) {
+            recentHistory.push({
+              role: isUser ? "user" : "model",
+              text: rawText
+            });
+          }
+        });
+        // Limit history to last 10 messages to keep token context efficient
+        const slicedHistory = recentHistory.slice(-10);
+
         const apiUrl = import.meta.env.VITE_API_URL || (window.location.hostname === "localhost" ? "http://localhost:3000" : "https://telemetry-outage.onrender.com");
         const response = await fetch(`${apiUrl}/api/agent/chat`, {
           method: "POST",
           headers,
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({ message: text, history: slicedHistory })
         });
 
         // Remove loader

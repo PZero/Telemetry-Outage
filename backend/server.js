@@ -1278,11 +1278,25 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             text: "Sei l'Assistente Virtuale ed Agente AI per il sistema Telemetry-Outage / PZero. Gestisci l'anagrafica delle Unità di Produzione (UP) e il tracciamento delle anomalie e dei cluster di telemetria. " +
                   "IMPORTANTE: Quando l'utente menziona o chiede informazioni su un partner PPA specifico (es. Google, DXT, Axpo, Enel), tecnologia o nome UP, DEVI SEMPRE passare il valore corrispondente nel parametro `ppa_partner`, `tech` o `name` della funzione `getRegistry` (es. `ppa_partner: 'Google'`). " +
                   "Quando l'utente chiede di associare un ID chat o una chat a un cluster (es. 'assegna l'id della chat al valore X'), invoca il tool `setClusterChatContext` specificando `clusterId` e `externalChatId`. " +
+                  "Se l'utente indica che per la risoluzione dell'anomalia occorrerà del tempo o una specifica durata (es. 'ci vorrà una settimana', 'serviranno 10 giorni', 'richiederà 5 giorni'), DEVI interpretare questa indicazione come una richiesta di SOSPENDERE il cluster (`suspendCluster`). Calcola la data `reactivationDate` sommando i giorni indicati (es. 7 giorni per 'una settimana', 14 per 'due settimane', N giorni per 'N giorni') alla data odierna. " +
                   "Quando l'utente chiede di sospendere, riattivare, chiudere o estendere un cluster, invoca i rispettivi tool (`suspendCluster`, `reactivateCluster`, `closeCluster`, `extendCluster`). " +
                   "Quando l'utente chiede se ci sono anomalie da gestire o lo stato generale dei cluster, invoca `getClusters` (con `status: 'open'`) oppure `getLatestCluster`. " +
                   "Analizza sempre i dati restituiti dai tool e rispondi in modo professionale, completo ed esaustivo in italiano, confermando l'operazione eseguita."
           }]
         };
+
+        const contents = [];
+        if (Array.isArray(req.body.history) && req.body.history.length > 0) {
+          req.body.history.forEach(item => {
+            if (item.text && (item.role === 'user' || item.role === 'model')) {
+              contents.push({
+                role: item.role,
+                parts: [{ text: item.text }]
+              });
+            }
+          });
+        }
+        contents.push({ role: "user", parts: [{ text: message }] });
 
         const geminiModel = process.env.GEMINI_MODEL || 'gemini-flash-latest';
         const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${apiKey}`;
@@ -1291,7 +1305,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             systemInstruction,
-            contents: [{ role: "user", parts: [{ text: message }] }],
+            contents,
             tools: [{ functionDeclarations: functions }]
           })
         });
@@ -1422,7 +1436,7 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
               body: JSON.stringify({
                 systemInstruction,
                 contents: [
-                  { role: "user", parts: [{ text: message }] },
+                  ...contents,
                   { role: "model", parts: [modelPart] },
                   {
                     role: "user",
@@ -1617,13 +1631,20 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             answer = "Impossibile associare la chat Teams perché non è stato trovato alcun cluster aperto a cui collegarla.";
           }
         }
-        else if (msg.includes("sospendi") || msg.includes("metti in pausa")) {
+        else if (msg.includes("sospendi") || msg.includes("metti in pausa") || msg.includes("settimana") || msg.includes("giorni") || msg.includes("tempo") || msg.includes("vorrà") || msg.includes("servirà")) {
           const cluster = await dbService.getLatestOpenCluster();
           if (cluster) {
-            const reactDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+            let days = 7;
+            const daysMatch = msg.match(/(\d+)\s*giorn/i);
+            if (daysMatch) {
+              days = parseInt(daysMatch[1], 10);
+            } else if (msg.includes("settimana")) {
+              days = 7;
+            }
+            const reactDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
             await dbService.suspendCluster(cluster.id, reactDate);
             addTrace("POST", `/api/agent/clusters/${cluster.id}/suspend`, { reactivation_date: reactDate }, 200, { success: true });
-            answer = `Il cluster #${cluster.id} è stato sospeso con successo fino al ${reactDate}. La riattivazione e i successivi check avverranno in tale data.`;
+            answer = `Ho interpretato la tua indicazione come richiesta di sospensione. Il cluster #${cluster.id} per l'impianto ${cluster.up_id} è stato sospeso con successo per ${days} giorni (fino al ${reactDate}).`;
           } else {
             answer = "Impossibile sospendere: nessun cluster aperto trovato nel sistema.";
           }
