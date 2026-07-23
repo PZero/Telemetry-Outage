@@ -1273,9 +1273,17 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           }
         ];
 
+function sanitizeCluster(c) {
+  if (!c) return c;
+  const obj = { ...c };
+  delete obj.id;
+  return obj;
+}
+
         const systemInstruction = {
           parts: [{
             text: "Sei l'Assistente Virtuale ed Agente AI per il sistema Telemetry-Outage / PZero. Gestisci l'anagrafica delle Unità di Produzione (UP) e il tracciamento delle anomalie e dei cluster di telemetria. " +
+                  "REGOLE RIGIDE: NON mostrare MAI l'ID identificativo numerico interno del database (es. Cluster ID 16, ID 17, id: 16) nei messaggi di risposta all'utente né nei riepiloghi. Identifica sempre le anomalie ed i cluster esclusivamente attraverso il codice dell'Unità di Produzione (`up_id`) e la tipologia dell'anomalia. " +
                   "IMPORTANTE: Quando l'utente menziona o chiede informazioni su un partner PPA specifico (es. Google, DXT, Axpo, Enel), tecnologia o nome UP, DEVI SEMPRE passare il valore corrispondente nel parametro `ppa_partner`, `tech` o `name` della funzione `getRegistry` (es. `ppa_partner: 'Google'`). " +
                   "Quando l'utente chiede di associare un ID chat o una chat a un cluster (es. 'assegna l'id della chat al valore X'), invoca il tool `setClusterChatContext` specificando `clusterId` e `externalChatId`. " +
                   "Se l'utente indica che per la risoluzione dell'anomalia occorrerà del tempo o una specifica durata (es. 'ci vorrà una settimana', 'serviranno 10 giorni', 'richiederà 5 giorni'), DEVI interpretare questa indicazione come una richiesta di SOSPENDERE il cluster (`suspendCluster`). Calcola la data `reactivationDate` sommando i giorni indicati (es. 7 giorni per 'una settimana', 14 per 'due settimane', N giorni per 'N giorni') alla data odierna. " +
@@ -1344,12 +1352,12 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
             } else if (func.name === "getClusters") {
               endpoint = "/api/agent/clusters";
               const data = await dbService.getClusters(args.status, args.upId, args.type);
-              toolResult = (data && data.length > 0) ? data : [];
+              toolResult = (data && data.length > 0) ? data.map(sanitizeCluster) : [];
               addTrace(method, endpoint, args, 200, toolResult);
             } else if (func.name === "getLatestCluster") {
               endpoint = "/api/agent/clusters/latest";
               const data = await dbService.getLatestOpenCluster(args.upId, args.type);
-              toolResult = data || { message: "Nessun cluster aperto trovato" };
+              toolResult = data ? sanitizeCluster(data) : { message: "Nessun cluster aperto trovato" };
               addTrace(method, endpoint, args, 200, toolResult);
             } else if (func.name === "runDiagnosticsTestDay") {
               method = "POST";
@@ -1400,31 +1408,31 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
               method = "POST";
               endpoint = `/api/agent/clusters/${args.clusterId}/chat-context`;
               await dbService.updateClusterChatContext(args.clusterId, args.externalChatId, args.chatPlatform || 'teams');
-              toolResult = { success: true, clusterId: args.clusterId, external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' };
+              toolResult = { success: true, external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' };
               addTrace(method, endpoint, { external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' }, 200, toolResult);
             } else if (func.name === "suspendCluster") {
               method = "POST";
               endpoint = `/api/agent/clusters/${args.clusterId}/suspend`;
               await dbService.suspendCluster(args.clusterId, args.reactivationDate);
-              toolResult = { success: true, clusterId: args.clusterId, reactivation_date: args.reactivationDate };
+              toolResult = { success: true, status: 'suspended', reactivation_date: args.reactivationDate };
               addTrace(method, endpoint, { reactivation_date: args.reactivationDate }, 200, toolResult);
             } else if (func.name === "reactivateCluster") {
               method = "POST";
               endpoint = `/api/agent/clusters/${args.clusterId}/reactivate`;
               await dbService.reactivateCluster(args.clusterId);
-              toolResult = { success: true, clusterId: args.clusterId, status: 'open' };
+              toolResult = { success: true, status: 'open' };
               addTrace(method, endpoint, null, 200, toolResult);
             } else if (func.name === "closeCluster") {
               method = "POST";
               endpoint = `/api/agent/clusters/${args.clusterId}/close`;
               await dbService.closeCluster(args.clusterId, args.resolutionCategory, args.resolutionNotes);
-              toolResult = { success: true, clusterId: args.clusterId, status: 'closed' };
+              toolResult = { success: true, status: 'closed' };
               addTrace(method, endpoint, { resolutionCategory: args.resolutionCategory, resolutionNotes: args.resolutionNotes }, 200, toolResult);
             } else if (func.name === "extendCluster") {
               method = "POST";
               endpoint = `/api/agent/clusters/${args.clusterId}/extend`;
               await dbService.extendCluster(args.clusterId, args.extendToDate, args.notes || 'Estensione cluster da agent chat');
-              toolResult = { success: true, clusterId: args.clusterId, extendToDate: args.extendToDate };
+              toolResult = { success: true, extendToDate: args.extendToDate };
               addTrace(method, endpoint, { extendToDate: args.extendToDate, notes: args.notes }, 200, toolResult);
             }
 
@@ -1486,27 +1494,27 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
                   }
                 } else if (func.name === "getClusters") {
                   if (Array.isArray(toolResult) && toolResult.length > 0) {
-                    answer = `Ci sono ${toolResult.length} anomalie/cluster a sistema:\n\n` +
-                      toolResult.map(c => `- **Cluster #${c.id}** su UP **${c.up_id}** (Tipo: ${c.type}, Stato: ${c.status}, Dal: ${c.start_date || 'N/D'})`).join("\n");
+                    answer = `Ci sono ${toolResult.length} anomalie aperte da gestire:\n\n` +
+                      toolResult.map((c, idx) => `${idx + 1}. **UP:** \`${c.up_id}\` - **Tipo Anomalia:** ${c.type} - **Periodo:** dal \`${c.start_date || 'N/D'}\` al \`${c.end_date || 'N/D'}\`` + (c.external_chat_id ? ` - **Chat:** \`${c.external_chat_id}\` (${c.chat_platform || 'teams'})` : '')).join("\n");
                   } else {
                     answer = "Attualmente non ci sono anomalie o cluster aperti o da gestire a sistema.";
                   }
                 } else if (func.name === "getLatestCluster") {
-                  if (toolResult && toolResult.id) {
-                    answer = `L'ultimo cluster attivo è il **Cluster #${toolResult.id}** per l'impianto **${toolResult.up_id}** (Tipo: ${toolResult.type}, Stato: ${toolResult.status}).`;
+                  if (toolResult && toolResult.up_id) {
+                    answer = `L'ultimo cluster attivo riguarda l'impianto **${toolResult.up_id}** (Tipo: ${toolResult.type}, Stato: ${toolResult.status}).`;
                   } else {
                     answer = "Nessun cluster di anomalie aperto o pendente trovato nel sistema.";
                   }
                 } else if (func.name === "setClusterChatContext") {
-                  answer = `L'ID chat '${args.externalChatId}' è stato associato con successo al **Cluster #${args.clusterId}**.`;
+                  answer = `L'ID chat '${args.externalChatId}' è stato associato con successo al cluster dell'impianto.`;
                 } else if (func.name === "suspendCluster") {
-                  answer = `Il **Cluster #${args.clusterId}** è stato sospeso con successo fino al **${args.reactivationDate}**.`;
+                  answer = `Il cluster dell'impianto è stato sospeso con successo fino al **${args.reactivationDate}**.`;
                 } else if (func.name === "reactivateCluster") {
-                  answer = `Il **Cluster #${args.clusterId}** è stato riattivato con successo.`;
+                  answer = `Il cluster dell'impianto è stato riattivato con successo.`;
                 } else if (func.name === "closeCluster") {
-                  answer = `Il **Cluster #${args.clusterId}** è stato chiuso e risolto con successo.`;
+                  answer = `Il cluster dell'impianto è stato chiuso e risolto con successo.`;
                 } else if (func.name === "extendCluster") {
-                  answer = `Il **Cluster #${args.clusterId}** è stato esteso con successo fino al **${args.extendToDate}**.`;
+                  answer = `Il cluster dell'impianto è stato esteso con successo fino al **${args.extendToDate}**.`;
                 } else if (func.name === "runDiagnosticsTestDay") {
                   const statusIcon = toolResult.status === 'green' ? '🟢 Legittimo / Integro' : (toolResult.status === 'orange' ? '🟠 Discrepanza / Buchi' : '🔴 Anomalia Grave');
                   const solarNote = toolResult.solar_shutdown ? ' (Spegnimento notturno ATTIVO: buchi notturni tollerati)' : '';
@@ -1611,11 +1619,11 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
           const latestCluster = await dbService.getLatestOpenCluster();
           addTrace("GET", "/api/agent/clusters", { status: 'open' }, 200, openClusters.length > 0 ? openClusters : (latestCluster || { message: "Nessun cluster aperto trovato" }));
           if (openClusters.length > 0) {
-            answer = `Sono presenti ${openClusters.length} anomalie/cluster aperti a sistema:\n\n` +
-              openClusters.map(c => `- **Cluster #${c.id}** (UP: ${c.up_id}, Tipo: ${c.type}, Stato: ${c.status})`).join("\n");
+            answer = `Sono presenti ${openClusters.length} anomalie aperte a sistema:\n\n` +
+              openClusters.map((c, idx) => `${idx + 1}. **UP:** ${c.up_id} (Tipo: ${c.type}, Stato: ${c.status})`).join("\n");
           } else if (latestCluster) {
             const upName = await dbService.resolveUpName(latestCluster.up_id);
-            answer = `Ho intercettato il cluster attivo #${latestCluster.id} relativo all'impianto ${upName}. Lo stato attuale è '${latestCluster.status}'.`;
+            answer = `Ho intercettato il cluster attivo relativo all'impianto ${upName}. Lo stato attuale è '${latestCluster.status}'.`;
           } else {
             answer = "Attualmente non ci sono cluster di anomalie aperti o pendenti nel sistema.";
           }
@@ -1724,7 +1732,7 @@ app.get('/api/agent/clusters', requireGoogleAuth, async (req, res) => {
   try {
     const { status, upId, type } = req.query;
     const clusters = await dbService.getClusters(status, upId, type);
-    res.json(clusters);
+    res.json((clusters || []).map(sanitizeCluster));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1790,7 +1798,7 @@ app.get('/api/agent/clusters/latest', requireGoogleAuth, async (req, res) => {
       await dbService.updateClusterChatContext(cluster.id, external_chat_id, chat_platform);
       cluster = await dbService.getLatestOpenCluster(upId, type);
     }
-    res.json(cluster);
+    res.json(sanitizeCluster(cluster));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
