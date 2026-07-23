@@ -1208,15 +1208,79 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
               },
               required: ["upId", "targetDate"]
             }
+          },
+          {
+            name: "setClusterChatContext",
+            description: "Associa o aggiorna l'ID della chat esterna (es. Teams) ed eventualmente la piattaforma chat a un determinato cluster di anomalie.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster di anomalie (es. 16, 17)" },
+                externalChatId: { type: "STRING", description: "L'ID o la stringa della chat esterna (es. 'Questo è un idchat inventato', '19:meeting...-thread.v2')" },
+                chatPlatform: { type: "STRING", description: "La piattaforma chat (default: 'teams')" }
+              },
+              required: ["clusterId", "externalChatId"]
+            }
+          },
+          {
+            name: "suspendCluster",
+            description: "Sospende temporaneamente un cluster di anomalie impostando uno stato di pausa fino a una data di riattivazione indicata.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster da sospendere" },
+                reactivationDate: { type: "STRING", description: "La data in formato YYYY-MM-DD fino a cui sospendere il ticket" }
+              },
+              required: ["clusterId", "reactivationDate"]
+            }
+          },
+          {
+            name: "reactivateCluster",
+            description: "Riattiva immediatamente un cluster di anomalie sospeso ripristinando lo stato a 'open'.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster da riattivare" }
+              },
+              required: ["clusterId"]
+            }
+          },
+          {
+            name: "closeCluster",
+            description: "Risolve e chiude definitivamente un cluster di anomalie registrando eventuali note e categoria di risoluzione.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster da chiudere" },
+                resolutionCategory: { type: "STRING", description: "Categoria opzionale di intervento/risoluzione" },
+                resolutionNotes: { type: "STRING", description: "Note dettagliate sulla risoluzione dell'anomalia" }
+              },
+              required: ["clusterId"]
+            }
+          },
+          {
+            name: "extendCluster",
+            description: "Estende la data di validità di un cluster di anomalie aperto a una nuova data finale.",
+            parameters: {
+              type: "OBJECT",
+              properties: {
+                clusterId: { type: "INTEGER", description: "L'identificativo numerico del cluster" },
+                extendToDate: { type: "STRING", description: "La nuova data finale YYYY-MM-DD" },
+                notes: { type: "STRING", description: "Note informative sull'estensione" }
+              },
+              required: ["clusterId", "extendToDate"]
+            }
           }
         ];
 
         const systemInstruction = {
           parts: [{
             text: "Sei l'Assistente Virtuale ed Agente AI per il sistema Telemetry-Outage / PZero. Gestisci l'anagrafica delle Unità di Produzione (UP) e il tracciamento delle anomalie e dei cluster di telemetria. " +
-                  "IMPORTANTE: Quando l'utente menziona o chiede informazioni su un partner PPA specifico (es. Google, DXT, Axpo, Enel), tecnologia o nome UP, DEVI SEMPRE passare il valore corrispondente nel parametro `ppa_partner`, `tech` o `name` della funzione `getRegistry` (es. `ppa_partner: 'Google'`). NON invocare mai `getRegistry` con parametri vuoti `{}` se l'utente ha menzionato un partner PPA, una tecnologia o una UP specifica. " +
+                  "IMPORTANTE: Quando l'utente menziona o chiede informazioni su un partner PPA specifico (es. Google, DXT, Axpo, Enel), tecnologia o nome UP, DEVI SEMPRE passare il valore corrispondente nel parametro `ppa_partner`, `tech` o `name` della funzione `getRegistry` (es. `ppa_partner: 'Google'`). " +
+                  "Quando l'utente chiede di associare un ID chat o una chat a un cluster (es. 'assegna l'id della chat al valore X'), invoca il tool `setClusterChatContext` specificando `clusterId` e `externalChatId`. " +
+                  "Quando l'utente chiede di sospendere, riattivare, chiudere o estendere un cluster, invoca i rispettivi tool (`suspendCluster`, `reactivateCluster`, `closeCluster`, `extendCluster`). " +
                   "Quando l'utente chiede se ci sono anomalie da gestire o lo stato generale dei cluster, invoca `getClusters` (con `status: 'open'`) oppure `getLatestCluster`. " +
-                  "Analizza sempre i dati restituiti dai tool e rispondi in modo professionale, completo ed esaustivo in italiano, elencando i risultati rilevanti."
+                  "Analizza sempre i dati restituiti dai tool e rispondi in modo professionale, completo ed esaustivo in italiano, confermando l'operazione eseguita."
           }]
         };
 
@@ -1278,6 +1342,36 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
               endpoint = "/api/agent/diagnostics/test-day";
               toolResult = { success: true, status: 'green', upId: args.upId, checkedDate: args.targetDate };
               addTrace(method, endpoint, args, 200, toolResult);
+            } else if (func.name === "setClusterChatContext") {
+              method = "POST";
+              endpoint = `/api/agent/clusters/${args.clusterId}/chat-context`;
+              await dbService.updateClusterChatContext(args.clusterId, args.externalChatId, args.chatPlatform || 'teams');
+              toolResult = { success: true, clusterId: args.clusterId, external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' };
+              addTrace(method, endpoint, { external_chat_id: args.externalChatId, chat_platform: args.chatPlatform || 'teams' }, 200, toolResult);
+            } else if (func.name === "suspendCluster") {
+              method = "POST";
+              endpoint = `/api/agent/clusters/${args.clusterId}/suspend`;
+              await dbService.suspendCluster(args.clusterId, args.reactivationDate);
+              toolResult = { success: true, clusterId: args.clusterId, reactivation_date: args.reactivationDate };
+              addTrace(method, endpoint, { reactivation_date: args.reactivationDate }, 200, toolResult);
+            } else if (func.name === "reactivateCluster") {
+              method = "POST";
+              endpoint = `/api/agent/clusters/${args.clusterId}/reactivate`;
+              await dbService.reactivateCluster(args.clusterId);
+              toolResult = { success: true, clusterId: args.clusterId, status: 'open' };
+              addTrace(method, endpoint, null, 200, toolResult);
+            } else if (func.name === "closeCluster") {
+              method = "POST";
+              endpoint = `/api/agent/clusters/${args.clusterId}/close`;
+              await dbService.closeCluster(args.clusterId, args.resolutionCategory, args.resolutionNotes);
+              toolResult = { success: true, clusterId: args.clusterId, status: 'closed' };
+              addTrace(method, endpoint, { resolutionCategory: args.resolutionCategory, resolutionNotes: args.resolutionNotes }, 200, toolResult);
+            } else if (func.name === "extendCluster") {
+              method = "POST";
+              endpoint = `/api/agent/clusters/${args.clusterId}/extend`;
+              await dbService.extendCluster(args.clusterId, args.extendToDate, args.notes || 'Estensione cluster da agent chat');
+              toolResult = { success: true, clusterId: args.clusterId, extendToDate: args.extendToDate };
+              addTrace(method, endpoint, { extendToDate: args.extendToDate, notes: args.notes }, 200, toolResult);
             }
 
             const modelPart = part;
@@ -1349,6 +1443,16 @@ app.post('/api/agent/chat', requireGoogleAuth, async (req, res) => {
                   } else {
                     answer = "Nessun cluster di anomalie aperto o pendente trovato nel sistema.";
                   }
+                } else if (func.name === "setClusterChatContext") {
+                  answer = `L'ID chat '${args.externalChatId}' è stato associato con successo al **Cluster #${args.clusterId}**.`;
+                } else if (func.name === "suspendCluster") {
+                  answer = `Il **Cluster #${args.clusterId}** è stato sospeso con successo fino al **${args.reactivationDate}**.`;
+                } else if (func.name === "reactivateCluster") {
+                  answer = `Il **Cluster #${args.clusterId}** è stato riattivato con successo.`;
+                } else if (func.name === "closeCluster") {
+                  answer = `Il **Cluster #${args.clusterId}** è stato chiuso e risolto con successo.`;
+                } else if (func.name === "extendCluster") {
+                  answer = `Il **Cluster #${args.clusterId}** è stato esteso con successo fino al **${args.extendToDate}**.`;
                 } else {
                   answer = "Elaborazione completata.";
                 }
