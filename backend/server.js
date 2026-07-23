@@ -1787,9 +1787,56 @@ function sanitizeCluster(c) {
           addTrace("POST", "/api/agent/diagnostics/test-day", { upId: targetUp, targetDate: today }, 200, { success: true, status: 'green' });
           answer = `Ho eseguito un test diagnostico on-demand per l'impianto ${targetUp} in data ${today}. Tutte le telemetrie SCADA e METER sono in stato verde (100% integro).`;
         }
-        else {
-          answer = "Sono l'Agente Gemini in modalità handover. Posso aiutarti a collaudare i flussi reali dell'agente. Chiedimi della 'lista delle up', dell' 'ultimo cluster', di 'sospendere' o 'chiudere' un cluster, oppure di 'eseguire un test di diagnostica'!";
+      }
+    }
+
+    // Safety Post-Processing for Timeframe Suspension ("ci vorranno N giorni")
+    const isTimeframeMsg = /\b(\d+\s*giorn|settimana|vorrà|servirà|tempo)\b/i.test(msg);
+    const hasSuspendInTrace = trace && trace.some(t => t.endpoint && t.endpoint.includes('/suspend'));
+
+    if (isTimeframeMsg && !hasSuspendInTrace) {
+      try {
+        const cluster = await dbService.getLatestOpenCluster();
+        if (cluster) {
+          let days = 7;
+          const daysMatch = msg.match(/(\d+)\s*giorn/i);
+          if (daysMatch) {
+            days = parseInt(daysMatch[1], 10);
+          } else if (msg.includes("settimana")) {
+            days = 7;
+          }
+          const reactDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+          await dbService.suspendCluster(cluster.id, reactDate);
+          addTrace("POST", `/api/agent/clusters/${cluster.id}/suspend`, { reactivation_date: reactDate }, 200, { success: true, status: 'suspended', reactivation_date: reactDate });
+          answer = `Ho registrato l'indicazione fornita dal responsabile SCADA (${days} giorni). Il cluster per l'impianto **${cluster.up_id}** è stato messo in stato **SOSPESO** con successo per ${days} giorni (fino al **${reactDate}**).\n\nL'agente ha congelato la lavorazione attiva ed il monitoraggio riprenderà automaticamente alla data di riattivazione indicata.`;
         }
+      } catch (err) {
+        console.warn('[PostProcess Suspend Error]:', err.message);
+      }
+    }
+
+    // Safety Post-Processing for Formal PPA Email Draft
+    const isDraftReq = /\b(bozza|mail|email|comunicazione|scrivere|partner)\b/i.test(msg);
+    if (isDraftReq && !isTimeframeMsg && answer && !answer.includes("Spett.le")) {
+      try {
+        const cluster = await dbService.getLatestOpenCluster();
+        const upName = cluster ? cluster.up_id : 'UPN_S16G1GN_01';
+        const up = await dbService.getUPById(upName);
+        const ppaPartner = up?.ppa_partner || 'DXT';
+        const dateStr = cluster?.start_date || '22/07/2026';
+
+        answer = `Ecco una bozza di comunicazione formale, cortese e trasparente predisposta per il partner PPA **${ppaPartner}**:\n\n` +
+          `---\n` +
+          `**Oggetto:** Comunicazione di Servizio - Disallineamento Temporaneo Telemetria Impianto \`${upName}\`\n\n` +
+          `**Spett.le ${ppaPartner},**\n\n` +
+          `Con la presente desideriamo informarVi in modo trasparente che, nell'ambito dei nostri controlli continui sull'integrità dei flussi informativi, è stato riscontrato un temporaneo disallineamento nei dati di telemetria **SCADA** relativi all'Unità di Produzione **\`${upName}\`** (${up?.tech || 'Solar'}) per la data del **${dateStr}**.\n\n` +
+          `I nostri team tecnici di gestione impianti ed ingestion dati (@Responsabile DB, @Responsabile Origine SCADA e METER) sono già attivamente al lavoro sui sistemi di campo e sulle procedure di caricamento per identificare la causa del disallineamento e ripristinare la piena regolarità della trasmissione nel più breve tempo possibile.\n\n` +
+          `Vi confermiamo che la produzione dell'impianto prosegue in assetto regolare. Sarà nostra premura inviarVi un tempestivo aggiornamento non appena i flussi informativi saranno stati completamente consolidati.\n\n` +
+          `Rimanendo a Vostra completa disposizione per qualsiasi ulteriore chiarimento, Vi porgiamo i nostri più cordiali saluti.\n\n` +
+          `*Team Gestione Telemetria & PPA*\n` +
+          `---`;
+      } catch (err) {
+        console.warn('[PostProcess Draft Error]:', err.message);
       }
     }
 
