@@ -321,6 +321,42 @@ function levenshtein(a, b) {
   return matrix[bn][an];
 }
 
+function analyzeStreamGaps(values, stepsCount = 96, isSolarShutdown = false) {
+  if (!values) return { isPresent: false, hasGaps: true, gapCount: stepsCount };
+  let validCount = 0;
+  let gapCount = 0;
+  const N = values.length;
+  for (let i = 0; i < N; i++) {
+    const val = values[i];
+    const hour = Math.floor(i / (N / 24));
+    const isNight = hour < 6 || hour >= 20;
+    const isNull = val === null || val === undefined;
+    const isErrorStr = typeof val === 'string' && (
+      val.toLowerCase().includes('not available') ||
+      val.toLowerCase().includes('n/a') ||
+      val.toLowerCase().includes('error') ||
+      val.toLowerCase().includes('nan')
+    );
+    if (isErrorStr) {
+      gapCount++;
+    } else if (isNull) {
+      if (isSolarShutdown && isNight) {
+        // Allowed nighttime shutdown
+      } else {
+        gapCount++;
+      }
+    } else {
+      validCount++;
+    }
+  }
+  return {
+    isPresent: validCount > 0,
+    hasGaps: gapCount > 0,
+    gapCount,
+    validCount
+  };
+}
+
 export const dbService = {
   async getObservations(upId, date, type) {
     const row = await dbGet(
@@ -621,9 +657,69 @@ export const dbService = {
     }
   },
 
+  async autoSyncDatabaseAnomalies() {
+    try {
+      const ups = await this.getRegistry();
+      if (!ups || ups.length === 0) return;
+
+      const dateRows = await dbAll("SELECT DISTINCT date FROM observations ORDER BY date DESC LIMIT 7");
+      if (!dateRows || dateRows.length === 0) return;
+
+      const dates = dateRows.map(r => r.date);
+
+      for (const up of ups) {
+        const isSolarShutdown = (up.tech === 'Solar' && (up.solar_shutdown === 1 || up.solar_shutdown === true));
+        const scadaDisabled = (up.scada_disabled === 1 || up.scada_disabled === true);
+
+        for (const targetDate of dates) {
+          const m = await this.getObservations(up.id, targetDate, 'meter');
+          const s = await this.getObservations(up.id, targetDate, 'scada');
+
+          const stepsMeter = m ? m.length : 96;
+          const stepsScada = s ? s.length : (up.tech === 'Wind' ? 144 : 96);
+
+          const meterAnalysis = analyzeStreamGaps(m, stepsMeter, isSolarShutdown);
+          const scadaAnalysis = scadaDisabled
+            ? { isPresent: true, hasGaps: false, gapCount: 0, validCount: stepsScada }
+            : analyzeStreamGaps(s, stepsScada, isSolarShutdown);
+
+          let anomalyType = null;
+          if (!meterAnalysis.isPresent && !scadaAnalysis.isPresent) {
+            anomalyType = 'both';
+          } else if (meterAnalysis.hasGaps && scadaAnalysis.hasGaps) {
+            anomalyType = 'both';
+          } else if (meterAnalysis.hasGaps || !meterAnalysis.isPresent) {
+            anomalyType = 'meter';
+          } else if (!scadaDisabled && (scadaAnalysis.hasGaps || !scadaAnalysis.isPresent)) {
+            anomalyType = 'scada';
+          }
+
+          if (anomalyType) {
+            const existing = await dbGet(
+              "SELECT id FROM clusters WHERE LOWER(up_id) = LOWER($1) AND status IN ('open', 'suspended')",
+              [up.id]
+            );
+            if (!existing) {
+              await this.createCluster(
+                up.id,
+                anomalyType,
+                targetDate,
+                targetDate,
+                `Anomalia di telemetria ${anomalyType.toUpperCase()} rilevata automaticamente dall'audit del DB per il giorno ${targetDate}.`
+              );
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.log('[AutoSyncAnomalies] Error:', err.message);
+    }
+  },
+
   // --- CLUSTERS & MESSAGES METHODS ---
   async getClusters(status, upId, type) {
     await this.checkAndReactivateSuspendedClusters();
+    await this.autoSyncDatabaseAnomalies();
     let sql = `
       SELECT c.* FROM clusters c
       JOIN registry r ON LOWER(c.up_id) = LOWER(r.id)
