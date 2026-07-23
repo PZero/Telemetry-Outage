@@ -694,9 +694,13 @@ function handleHeatmapCellClick(upId, dateStr) {
  * Navigates view panel tabs.
  */
 function navigateToView(viewName) {
-  // Guard access to settings for non-admin users
+  // Guard access to settings/handover for non-authorized users
   if (viewName === "settings" && state.user && state.user.role !== 'admin') {
     console.warn("[Auth Security] Rejected unauthorized access to Settings.");
+    viewName = "fleet";
+  }
+  if (viewName === "handover" && state.user && state.user.role !== 'admin' && state.user.role !== 'system_integrator') {
+    console.warn("[Auth Security] Rejected unauthorized access to Handover.");
     viewName = "fleet";
   }
 
@@ -710,7 +714,7 @@ function navigateToView(viewName) {
   state.view = viewName;
 
   // Hide all view panels safely
-  const views = ["fleet-heatmap-view", "fleet-stats-view", "detail-deepdive-view", "settings-view", "ppa-view", "audit-view", "export-view"];
+  const views = ["fleet-heatmap-view", "fleet-stats-view", "detail-deepdive-view", "settings-view", "ppa-view", "audit-view", "export-view", "handover-view"];
   views.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.classList.add("hidden");
@@ -728,7 +732,8 @@ function navigateToView(viewName) {
     audit: document.getElementById("nav-audit-btn"),
     export: document.getElementById("nav-export-btn"),
     ppa: document.getElementById("nav-ppa-btn"),
-    settings: document.getElementById("nav-settings-btn")
+    settings: document.getElementById("nav-settings-btn"),
+    handover: document.getElementById("nav-handover-btn")
   };
 
   Object.keys(tabs).forEach(key => {
@@ -755,12 +760,19 @@ function navigateToView(viewName) {
     ppa: "ppa-view",
     settings: "settings-view",
     audit: "audit-view",
-    export: "export-view"
+    export: "export-view",
+    handover: "handover-view"
   };
   const targetId = viewIdMap[viewName];
   const targetEl = targetId ? document.getElementById(targetId) : null;
   if (targetEl) {
     targetEl.classList.remove("hidden");
+  }
+
+  if (viewName === "handover") {
+    if (typeof initHandoverView === 'function') {
+      initHandoverView();
+    }
   }
 
   // Run view init handlers
@@ -2193,6 +2205,18 @@ function loginUser(user) {
           }
         }
       }
+      
+      const navHandoverBtn = document.getElementById("nav-handover-btn");
+      if (navHandoverBtn) {
+        if (state.user.role === 'admin' || state.user.role === 'system_integrator') {
+          navHandoverBtn.style.setProperty("display", "flex", "important");
+        } else {
+          navHandoverBtn.style.setProperty("display", "none", "important");
+          if (state.view === "handover") {
+            navigateToView("fleet");
+          }
+        }
+      }
 
       await fetchPPATagsFromServer();
       await initDB();
@@ -2239,10 +2263,14 @@ function logoutUser() {
   const widget = document.getElementById("user-profile-widget");
   if (widget) widget.style.display = "none";
 
-  // Hide settings nav tab for security
+  // Hide settings and handover nav tabs for security
   const navSettingsBtn = document.getElementById("nav-settings-btn");
+  const navHandoverBtn = document.getElementById("nav-handover-btn");
   if (navSettingsBtn) {
     navSettingsBtn.style.setProperty("display", "none", "important");
+  }
+  if (navHandoverBtn) {
+    navHandoverBtn.style.setProperty("display", "none", "important");
   }
   
   console.log('[Auth] User logged out.');
@@ -2639,11 +2667,16 @@ async function loadUsersTable() {
       
       const avatarHtml = user.picture 
         ? `<img src="${user.picture}" alt="" style="width: 24px; height: 24px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.1);">`
-        : `<div style="width: 24px; height: 24px; border-radius: 50%; background: ${isAdmin ? 'linear-gradient(135deg, #a855f7, #3b82f6)' : 'rgba(255,255,255,0.08)'}; color: white; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.1);">${initials || 'US'}</div>`;
+        : `<div style="width: 24px; height: 24px; border-radius: 50%; background: ${user.role === 'admin' ? 'linear-gradient(135deg, #a855f7, #3b82f6)' : 'rgba(255,255,255,0.08)'}; color: white; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; font-weight: 700; border: 1px solid rgba(255,255,255,0.1);">${initials || 'US'}</div>`;
 
-      const roleBadge = isAdmin
-        ? `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; font-weight: 600; font-size: 0.65rem;">Admin</span>`
-        : `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: var(--text-muted); font-size: 0.65rem;">Utente</span>`;
+      let roleBadge = '';
+      if (user.role === 'admin') {
+        roleBadge = `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; font-weight: 600; font-size: 0.65rem;">Admin</span>`;
+      } else if (user.role === 'system_integrator') {
+        roleBadge = `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; font-weight: 600; font-size: 0.65rem;">System Integrator</span>`;
+      } else {
+        roleBadge = `<span style="padding: 2px 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: var(--text-muted); font-size: 0.65rem;">Utente</span>`;
+      }
 
       // Status Badge details
       let statusBadge = '';
@@ -2668,11 +2701,13 @@ async function loadUsersTable() {
         if (user.approved === 1) {
           approvalButtonsHtml = `<button class="btn btn-danger decline-user-btn" data-email="${user.email}" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; margin-right: 6px;">Blocca Accesso</button>`;
           
-          if (isAdmin) {
-            roleButtonHtml = `<button class="btn btn-danger ppa-delete-tag-btn change-user-role-btn" data-email="${user.email}" data-target-role="normal" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171;">Rimuovi Admin</button>`;
-          } else {
-            roleButtonHtml = `<button class="btn btn-primary change-user-role-btn" data-email="${user.email}" data-target-role="admin" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); color: #60a5fa;">Promuovi ad Admin</button>`;
-          }
+          roleButtonHtml = `
+            <select class="custom-select change-user-role-select" data-email="${user.email}" style="font-size: 0.65rem; padding: 2px 6px; width: auto; background: #0f172a; border: 1px solid var(--panel-border); color: var(--text-main); border-radius: 4px; outline: none; cursor: pointer;">
+              <option value="normal" ${user.role === 'normal' || !user.role ? 'selected' : ''}>Utente</option>
+              <option value="system_integrator" ${user.role === 'system_integrator' ? 'selected' : ''}>System Integrator</option>
+              <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+            </select>
+          `;
         } else if (user.approved === 0 || user.approved === undefined || user.approved === null) {
           approvalButtonsHtml = `
             <button class="btn btn-success approve-user-btn" data-email="${user.email}" style="font-size: 0.65rem; padding: 4px 8px; width: auto; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #34d399; margin-right: 6px;">Approva</button>
@@ -2699,31 +2734,29 @@ async function loadUsersTable() {
       `;
     }).join("");
 
-    // Bind role change buttons
-    tbody.querySelectorAll(".change-user-role-btn").forEach(btn => {
-      btn.onclick = async () => {
-        const email = btn.dataset.email;
-        const targetRole = btn.dataset.targetRole;
-        const actionLabel = targetRole === 'admin' ? 'promuovere ad Admin' : 'rimuovere da Admin';
+    // Bind role change selects
+    tbody.querySelectorAll(".change-user-role-select").forEach(select => {
+      select.onchange = async () => {
+        const email = select.dataset.email;
+        const targetRole = select.value;
         
-        if (confirm(`Sei sicuro di voler ${actionLabel} l'utente "${email}"?`)) {
-          try {
-            const updateUrl = `${apiUrl}/api/users/role`;
-            const res = await fetch(updateUrl, {
-              method: 'POST',
-              headers: getAuthHeaders(),
-              body: JSON.stringify({ email, role: targetRole })
-            });
-            if (!res.ok) {
-              const err = await res.json();
-              throw new Error(err.error || `HTTP error ${res.status}`);
-            }
-            showToastNotification(`Ruolo aggiornato con successo per ${email}`);
-            await loadUsersTable();
-          } catch (e) {
-            console.error(e);
-            alert(`Errore cambio ruolo: ${e.message}`);
+        try {
+          const updateUrl = `${apiUrl}/api/users/role`;
+          const res = await fetch(updateUrl, {
+            method: 'POST',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ email, role: targetRole })
+          });
+          if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || `HTTP error ${res.status}`);
           }
+          showToastNotification(`Ruolo aggiornato in ${targetRole} per ${email}`);
+          await loadUsersTable();
+        } catch (e) {
+          console.error(e);
+          alert(`Errore cambio ruolo: ${e.message}`);
+          await loadUsersTable();
         }
       };
     });
@@ -2953,4 +2986,153 @@ function initExportView() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+}
+
+let isHandoverInitialized = false;
+
+function initHandoverView() {
+  const apiSelect = document.getElementById("playground-api-select");
+  const authSelect = document.getElementById("playground-auth-select");
+  const requestBody = document.getElementById("playground-request-body");
+  const endpointLabel = document.getElementById("playground-endpoint-label");
+  const sendBtn = document.getElementById("playground-send-btn");
+  const statusBadge = document.getElementById("playground-status-badge");
+  const responseBody = document.getElementById("playground-response-body");
+
+  if (!apiSelect || !authSelect || !requestBody || !endpointLabel || !sendBtn) return;
+
+  const apiTemplates = {
+    get_latest_cluster: {
+      method: "GET",
+      path: "/api/agent/clusters/latest",
+      body: ""
+    },
+    get_registry: {
+      method: "GET",
+      path: "/api/agent/registry",
+      body: ""
+    },
+    set_chat_context: {
+      method: "POST",
+      path: "/api/agent/clusters/15/chat-context",
+      body: JSON.stringify({
+        external_chat_id: "19:meeting_Y2ZmYTZhNDgt...-thread.v2",
+        chat_platform: "teams"
+      }, null, 2)
+    },
+    suspend_cluster: {
+      method: "POST",
+      path: "/api/agent/clusters/15/suspend",
+      body: JSON.stringify({
+        reactivation_date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]
+      }, null, 2)
+    },
+    reactivate_cluster: {
+      method: "POST",
+      path: "/api/agent/clusters/15/reactivate",
+      body: ""
+    },
+    close_cluster: {
+      method: "POST",
+      path: "/api/agent/clusters/15/close",
+      body: ""
+    },
+    run_diagnostics: {
+      method: "POST",
+      path: "/api/agent/diagnostics/test-day",
+      body: JSON.stringify({
+        upId: "UP_WIND_1",
+        targetDate: new Date().toISOString().split("T")[0]
+      }, null, 2)
+    }
+  };
+
+  const updatePlaygroundAPI = () => {
+    const selected = apiSelect.value;
+    const template = apiTemplates[selected];
+    if (template) {
+      endpointLabel.innerText = `${template.method} ${template.path}`;
+      requestBody.value = template.body;
+      requestBody.disabled = (template.method === "GET" || template.body === "");
+      requestBody.style.opacity = requestBody.disabled ? "0.5" : "1";
+    }
+  };
+
+  if (!isHandoverInitialized) {
+    isHandoverInitialized = true;
+    apiSelect.onchange = updatePlaygroundAPI;
+
+    sendBtn.onclick = async () => {
+      const selected = apiSelect.value;
+      const template = apiTemplates[selected];
+      if (!template) return;
+
+      sendBtn.disabled = true;
+      sendBtn.innerText = "Inviando...";
+      statusBadge.style.display = "none";
+      responseBody.innerText = "Attesa risposta...";
+
+      try {
+        const authMode = authSelect.value;
+        const headers = {
+          "Content-Type": "application/json"
+        };
+
+        if (authMode === "mock") {
+          headers["Authorization"] = "Bearer mock-google-token-id";
+        } else {
+          const curHeaders = getAuthHeaders();
+          if (curHeaders.Authorization) {
+            headers["Authorization"] = curHeaders.Authorization;
+          }
+        }
+
+        const fetchOptions = {
+          method: template.method,
+          headers
+        };
+
+        if (template.method !== "GET" && requestBody.value.trim() !== "") {
+          fetchOptions.body = requestBody.value;
+        }
+
+        const apiUrl = import.meta.env.VITE_API_URL || (window.location.hostname === "localhost" ? "http://localhost:3000" : "https://telemetry-outage.onrender.com");
+        const response = await fetch(`${apiUrl}${template.path}`, fetchOptions);
+
+        statusBadge.style.display = "inline-block";
+        statusBadge.innerText = `${response.status} ${response.statusText}`;
+
+        if (response.ok) {
+          statusBadge.style.background = "rgba(16, 185, 129, 0.15)";
+          statusBadge.style.color = "#34d399";
+          statusBadge.style.border = "1px solid rgba(16, 185, 129, 0.3)";
+        } else {
+          statusBadge.style.background = "rgba(239, 68, 68, 0.15)";
+          statusBadge.style.color = "#f87171";
+          statusBadge.style.border = "1px solid rgba(239, 68, 68, 0.3)";
+        }
+
+        let resData;
+        try {
+          resData = await response.json();
+        } catch {
+          resData = await response.text();
+        }
+
+        responseBody.innerText = typeof resData === "object" ? JSON.stringify(resData, null, 2) : resData;
+      } catch (err) {
+        statusBadge.style.display = "inline-block";
+        statusBadge.innerText = "ERROR";
+        statusBadge.style.background = "rgba(239, 68, 68, 0.15)";
+        statusBadge.style.color = "#f87171";
+        statusBadge.style.border = "1px solid rgba(239, 68, 68, 0.3)";
+        responseBody.innerText = err.message;
+      } finally {
+        sendBtn.disabled = false;
+        sendBtn.innerText = "Invia Test API";
+      }
+    };
+  }
+
+  updatePlaygroundAPI();
 }
