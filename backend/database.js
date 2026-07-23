@@ -877,39 +877,70 @@ export const dbService = {
     await this.checkAndReactivateSuspendedClusters();
     let sql = `
       SELECT c.* FROM clusters c
-      JOIN registry r ON LOWER(c.up_id) = LOWER(r.id)
+      LEFT JOIN registry r ON (LOWER(c.up_id) = LOWER(r.id) OR LOWER(c.up_id) = LOWER(r.name))
       WHERE c.status IN ('open', 'suspended')
     `;
     const params = [];
     let paramIdx = 1;
     if (upId) {
-      sql += ` AND LOWER(c.up_id) = LOWER($${paramIdx++})`;
+      sql += ` AND (LOWER(c.up_id) = LOWER($${paramIdx}) OR LOWER(r.name) = LOWER($${paramIdx}))`;
       params.push(upId);
+      paramIdx++;
     }
     if (type) {
       sql += ` AND c.type = $${paramIdx++}`;
       params.push(type);
     }
-    sql += ' ORDER BY c.start_date DESC, c.created_at DESC LIMIT 1';
+    sql += ' ORDER BY c.created_at DESC LIMIT 1';
     const row = await dbGet(sql, params);
     return row || null;
   },
 
-  async suspendCluster(clusterId, reactivationDate) {
+  async suspendCluster(clusterIdOrUpId, reactivationDate) {
     const now = new Date().toISOString();
-    await dbRun(
-      "UPDATE clusters SET status = 'suspended', reactivation_date = $1, updated_at = $2 WHERE id = $3",
-      [reactivationDate, now, clusterId]
-    );
+    if (typeof clusterIdOrUpId === 'number' || /^\d+$/.test(clusterIdOrUpId)) {
+      await dbRun(
+        "UPDATE clusters SET status = 'suspended', reactivation_date = $1, updated_at = $2 WHERE id = $3",
+        [reactivationDate, now, parseInt(clusterIdOrUpId, 10)]
+      );
+    } else {
+      await dbRun(
+        "UPDATE clusters SET status = 'suspended', reactivation_date = $1, updated_at = $2 WHERE (LOWER(up_id) = LOWER($3) OR LOWER(up_id) IN (SELECT LOWER(id) FROM registry WHERE LOWER(name) = LOWER($3))) AND status IN ('open', 'suspended')",
+        [reactivationDate, now, clusterIdOrUpId]
+      );
+    }
     return true;
   },
 
-  async reactivateCluster(clusterId) {
+  async reactivateCluster(clusterIdOrUpId) {
     const now = new Date().toISOString();
-    await dbRun(
-      "UPDATE clusters SET status = 'open', reactivation_date = NULL, updated_at = $1 WHERE id = $2",
-      [now, clusterId]
-    );
+    if (typeof clusterIdOrUpId === 'number' || /^\d+$/.test(clusterIdOrUpId)) {
+      await dbRun(
+        "UPDATE clusters SET status = 'open', reactivation_date = NULL, updated_at = $1 WHERE id = $2",
+        [now, parseInt(clusterIdOrUpId, 10)]
+      );
+    } else {
+      await dbRun(
+        "UPDATE clusters SET status = 'open', reactivation_date = NULL, updated_at = $1 WHERE (LOWER(up_id) = LOWER($2) OR LOWER(up_id) IN (SELECT LOWER(id) FROM registry WHERE LOWER(name) = LOWER($2))) AND status = 'suspended'",
+        [now, clusterIdOrUpId]
+      );
+    }
+    return true;
+  },
+
+  async closeCluster(clusterIdOrUpId, resolutionCategory, resolutionNotes) {
+    const now = new Date().toISOString();
+    if (typeof clusterIdOrUpId === 'number' || /^\d+$/.test(clusterIdOrUpId)) {
+      await dbRun(
+        "UPDATE clusters SET status = 'closed', updated_at = $1 WHERE id = $2",
+        [now, parseInt(clusterIdOrUpId, 10)]
+      );
+    } else {
+      await dbRun(
+        "UPDATE clusters SET status = 'closed', updated_at = $1 WHERE (LOWER(up_id) = LOWER($2) OR LOWER(up_id) IN (SELECT LOWER(id) FROM registry WHERE LOWER(name) = LOWER($2))) AND status IN ('open', 'suspended')",
+        [now, clusterIdOrUpId]
+      );
+    }
     return true;
   },
 

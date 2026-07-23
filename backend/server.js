@@ -1791,20 +1791,50 @@ function sanitizeCluster(c) {
     }
 
     // Safety Post-Processing for Timeframe Suspension ("ci vorranno N giorni")
-    const isTimeframeMsg = /\b(\d+\s*giorn|settimana|vorrà|servirà|tempo)\b/i.test(msg);
+    const lowerMsg = (msg || '').toLowerCase();
+    const isTimeframeMsg =
+      lowerMsg.includes("giorn") ||
+      lowerMsg.includes("settiman") ||
+      lowerMsg.includes("vorr") ||
+      lowerMsg.includes("servir") ||
+      lowerMsg.includes("sospend") ||
+      lowerMsg.includes("pausa") ||
+      lowerMsg.includes("tempo");
+
     const hasSuspendInTrace = trace && trace.some(t => t.endpoint && t.endpoint.includes('/suspend'));
 
     if (isTimeframeMsg && !hasSuspendInTrace) {
       try {
-        const cluster = await dbService.getLatestOpenCluster();
-        if (cluster) {
-          let days = 7;
-          const daysMatch = msg.match(/(\d+)\s*giorn/i);
-          if (daysMatch) {
-            days = parseInt(daysMatch[1], 10);
-          } else if (msg.includes("settimana")) {
-            days = 7;
+        let days = 7;
+        const daysMatch = lowerMsg.match(/(\d+)\s*giorn/i);
+        if (daysMatch) {
+          days = parseInt(daysMatch[1], 10);
+        } else if (lowerMsg.includes("settiman")) {
+          days = 7;
+        }
+
+        // Try to find target UP mentioned in recent history or latest open cluster
+        let targetUpId = null;
+        if (Array.isArray(req.body.history)) {
+          for (let i = req.body.history.length - 1; i >= 0; i--) {
+            const txt = req.body.history[i].text || '';
+            const upMatch = txt.match(/\b(UPN?[-_A-Z0-9]+|GARNACHA)\b/i);
+            if (upMatch) {
+              targetUpId = upMatch[1].toUpperCase();
+              break;
+            }
           }
+        }
+
+        let cluster = null;
+        if (targetUpId) {
+          cluster = await dbService.getLatestOpenCluster(targetUpId);
+        }
+        if (!cluster) {
+          cluster = await dbService.getLatestOpenCluster();
+        }
+
+        if (cluster) {
           const reactDate = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
           await dbService.suspendCluster(cluster.id, reactDate);
           addTrace("POST", `/api/agent/clusters/${cluster.id}/suspend`, { reactivation_date: reactDate }, 200, { success: true, status: 'suspended', reactivation_date: reactDate });
